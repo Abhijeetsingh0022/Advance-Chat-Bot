@@ -1,0 +1,59 @@
+# ==================================
+# Root Level .gitignore
+# ==================================
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+chatbot.db
+
+# Environment Files
+.env
+.env.local
+.env.*.local
+
+# OS Files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+app.log
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Documentation with sensitive info
+OPENWEATHERMAP_INTEGRATION.md
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+tmp/
+temp/

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Verification - ChatBot</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #ffffff;
+            color: #000000;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border: 1px solid #e0e0e0;
+        }
+        .header {
+            background-color: #000000;
+            color: #ffffff;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 300;
+            letter-spacing: 2px;
+        }
+        .content {
+            padding: 40px 30px;
+            line-height: 1.6;
+        }
+        .content h2 {
+            font-size: 20px;
+            font-weight: 400;
+            margin-top: 0;
+            margin-bottom: 20px;
+            color: #000000;
+        }
+        .content p {
+            margin-bottom: 20px;
+            color: #333333;
+        }
+        .button {
+            display: inline-block;
+            background-color: #000000;
+            color: #ffffff !important;
+            text-decoration: none;
+            padding: 15px 30px;
+            border-radius: 4px;
+            font-weight: 500;
+            margin: 20px 0;
+            transition: background-color 0.3s ease;
+        }
+        .button:hover {
+            background-color: #333333;
+        }
+        .link-container {
+            text-align: center;
+            margin: 30px 0;
+        }
+        .footer {
+            background-color: #f8f8f8;
+            padding: 20px 30px;
+            text-align: center;
+            border-top: 1px solid #e0e0e0;
+        }
+        .footer p {
+            margin: 0;
+            font-size: 12px;
+            color: #666666;
+        }
+        .warning {
+            background-color: #f0f0f0;
+            border-left: 4px solid #000000;
+            padding: 15px 20px;
+            margin: 20px 0;
+        }
+        .warning p {
+            margin: 0;
+            font-size: 14px;
+            color: #333333;
+        }
+        .instructions {
+            background-color: #f8f8f8;
+            padding: 20px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        .instructions ol {
+            margin: 0;
+            padding-left: 20px;
+        }
+        .instructions li {
+            margin-bottom: 8px;
+            color: #333333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>CHATBOT</h1>
+        </div>
+        <div class="content">
+            <h2>Verify Your Email Address</h2>
+            <p>Hello,</p>
+            <p>Thank you for registering with ChatBot. To complete your registration and secure your account, please verify your email address by clicking the button below:</p>
+
+            <div class="link-container">
+                <a href="{{ verification_link }}" class="button">Verify Email Address</a>
+            </div>
+
+            <div class="instructions">
+                <p><strong>How to verify:</strong></p>
+                <ol>
+                    <li>Click the "Verify Email Address" button above</li>
+                    <li>You will be redirected to complete your verification</li>
+                </ol>
+            </div>
+
+            <p>This verification link will expire in 24 hours for security reasons.</p>
+
+            <div class="warning">
+                <p><strong>Security Notice:</strong> Do not share this link with anyone. Our team will never ask for your verification link.</p>
+            </div>
+
+            <p>If you didn't request this verification, please ignore this email.</p>
+        </div>
+        <div class="footer">
+            <p>This email was sent by ChatBot. Please do not reply to this message.</p>
+            <p>&copy; 2025 ChatBot. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

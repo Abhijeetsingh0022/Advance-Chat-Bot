@@ -1,0 +1,144 @@
+# ==================================
+# Python Backend .gitignore
+# ==================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+pythonenv*
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyTest
+.pytest_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+.cache
+.pytest_cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pytype
+.pytype/
+
+# Security - Sensitive keys and certificates
+*.pem
+*.key
+*.cert
+*.crt
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+chatbot.db
+*.db-journal
+
+# Logs
+*.log
+logs/
+app.log
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Environment variables (CRITICAL - NEVER COMMIT)
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# Alembic
+alembic/versions/__pycache__/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+*~
+*.orig
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Testing files (DO NOT COMMIT)
+test_*.py
+*_test.py
+test_*.sh
+*_test.sh
+check_*.py
+create_test_*.py
+decode_*.py
+reset_*.py
+verify_*.sh
+
+# Documentation files
+*COMPLETION_SUMMARY.md
+*FIXES_COMPLETED.md
+*IMPROVEMENTS_COMPLETED.md
+*QUICK_REFERENCE.md
+*README_STRUCTURE.md
+
+# Migration scripts (one-time use)
+migrate_*.py
