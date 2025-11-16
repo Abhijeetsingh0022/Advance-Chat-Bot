@@ -12,7 +12,9 @@ from app.models.analytics import (
     ResponseTimeEntry
 )
 
+
 logger = logging.getLogger(__name__)
+
 
 
 class AnalyticsService:

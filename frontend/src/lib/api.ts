@@ -1,58 +1,47 @@
-import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
+/**
+ * API Client
+ * Centralized API configuration and utilities for backend integration
+ */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
+import { useAuthStore } from '@/store';
 
-// Helper to get token from zustand store
-const getToken = () => {
-  if (typeof window === 'undefined') return null;
-  
-  // Try to get from zustand store persisted in localStorage
-  try {
-    const authStorage = localStorage.getItem('auth-storage');
-    if (authStorage) {
-      const parsed = JSON.parse(authStorage);
-      return parsed.state?.token || null;
-    }
-  } catch (e) {
-    console.warn('Failed to parse auth storage:', e);
-  }
-  
-  return null;
-};
+// Base API configuration
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+const API_TIMEOUT = 120000; // 2 minutes for long-running requests
 
-// Create axios instance
-const api: AxiosInstance = axios.create({
-  baseURL: API_URL,
+// Create axios instance for chat API
+export const chatAPI: AxiosInstance = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: API_TIMEOUT,
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 30000, // 30 seconds
 });
 
 // Request interceptor to add auth token
-api.interceptors.request.use(
-  (config: InternalAxiosRequestConfig) => {
-    if (typeof window !== 'undefined') {
-      const token = getToken();
-      if (token && config.headers) {
-        config.headers.Authorization = `Bearer ${token}`;
-      }
+chatAPI.interceptors.request.use(
+  (config) => {
+    const token = useAuthStore.getState().token;
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
-  (error: AxiosError) => {
+  (error) => {
     return Promise.reject(error);
   }
 );
 
 // Response interceptor for error handling
-api.interceptors.response.use(
+chatAPI.interceptors.response.use(
   (response) => response,
-  (error: AxiosError) => {
+  (error) => {
     if (error.response?.status === 401) {
-      // Clear auth and redirect to login on 401
+      // Unauthorized - clear auth state
+      useAuthStore.getState().logout();
+      // Optionally redirect to login
       if (typeof window !== 'undefined') {
-        localStorage.removeItem('auth-storage');
         window.location.href = '/login';
       }
     }
@@ -60,322 +49,414 @@ api.interceptors.response.use(
   }
 );
 
-// Auth API
-export const authAPI = {
-  register: (data: { email: string; password: string; verification_method: 'otp' | 'token' }) =>
-    api.post('/auth/register', data),
-  
-  login: (data: { email: string; password: string }) =>
-    api.post('/auth/login', data),
-  
-  verifyOTP: (data: { email: string; otp: string }) =>
-    api.post('/auth/verify-otp', data),
-  
-  verifyToken: (token: string) =>
-    api.get(`/auth/verify?token=${token}`),
-  
-  resendVerification: (data: { email: string; verification_method?: 'otp' | 'token' }) =>
-    api.post('/auth/resend-verification', data),
-  
-  forgotPassword: (data: { email: string }) =>
-    api.post('/auth/forgot-password', data),
-  
-  resetPassword: (data: { token: string; new_password: string }) =>
-    api.post('/auth/reset-password', data),
-  
-  getProfile: () =>
-    api.get('/auth/me'),
-  
-  updateProfile: (data: { email?: string; is_active?: boolean }) =>
-    api.put('/auth/me', data),
-  
-  changePassword: (data: FormData) =>
-    api.post('/auth/change-password', data, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    }),
-  
-  deleteAccount: (data: FormData) =>
-    api.delete('/auth/me', {
-      data,
-      headers: { 'Content-Type': 'multipart/form-data' }
-    }),
-  
-  logout: () =>
-    api.post('/auth/logout'),
-};
-
-// Chat API
-export const chatAPI = {
-  sendMessage: (data: {
-    message: string;
-    session_id?: string;
-    conversation_type?: string;
-    max_tokens?: number;
-    temperature?: number;
+/**
+ * Stream chat message with SSE (Server-Sent Events)
+ * Handles token-by-token streaming with memory, routing, and tool call support
+ */
+export async function streamChatMessage(
+  message: string,
+  sessionId: string | null,
+  onChunk: (chunk: string, accumulated: string) => void,
+  onComplete: (data: any) => void,
+  onError: (error: any) => void,
+  onMemories?: (memories: any[]) => void,
+  onRouting?: (routing: any) => void,
+  onTools?: (toolsCount: number) => void,
+  onToolCall?: (toolCall: any) => void,
+  onToolResult?: (toolName: string, result: any) => void,
+  options?: {
     model?: string;
-  }) =>
-    api.post('/chat/', data, {
-      timeout: 120000, // 2 minutes for AI responses
-    }),
-  
-  // Streaming response with Server-Sent Events
-  streamMessage: async (
-    data: {
-      message: string;
-      session_id?: string;
-      conversation_type?: string;
-      max_tokens?: number;
-      temperature?: number;
-      model?: string;
-    },
-    onChunk: (chunk: string, accumulated: string) => void,
-    onComplete: (data: any) => void,
-    onError: (error: string) => void
-  ) => {
-    const token = getToken();
-    if (!token) {
-      onError('Authentication required');
-      return;
+    temperature?: number;
+    conversationType?: string;
+    optimizeFor?: string;
+    maxTokens?: number;
+  }
+): Promise<void> {
+  try {
+    const token = useAuthStore.getState().token;
+    
+    // Build request body
+    const requestBody: any = {
+      message,
+      conversation_type: options?.conversationType || 'general',
+    };
+    
+    if (sessionId) requestBody.session_id = sessionId;
+    if (options?.model) requestBody.model = options.model;
+    if (options?.temperature) requestBody.temperature = options.temperature;
+    if (options?.optimizeFor) requestBody.optimize_for = options.optimizeFor;
+    if (options?.maxTokens) requestBody.max_tokens = options.maxTokens;
+
+    // Fetch with streaming
+    const response = await fetch(`${API_BASE_URL}/chat/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token && { Authorization: `Bearer ${token}` }),
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
     }
 
-    try {
-      const response = await fetch(`${API_URL}/chat/stream`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify(data),
-      });
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+    if (!reader) {
+      throw new Error('No response body');
+    }
 
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
+    let buffer = '';
+    let fullResponse = '';
+    let completionData: any = {};
 
-      if (!reader) {
-        throw new Error('Response body is not readable');
-      }
+    while (true) {
+      const { done, value } = await reader.read();
 
-      let buffer = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = JSON.parse(line.slice(6));
-            
-            if (data.type === 'chunk') {
-              onChunk(data.content, data.accumulated);
-            } else if (data.type === 'complete') {
-              onComplete(data);
-            } else if (data.type === 'error') {
-              onError(data.error);
-            } else if (data.type === 'session_id') {
-              // Handle session_id if needed
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6).trim();
+          if (!data || data === '[DONE]') continue;
+
+          try {
+            const parsed = JSON.parse(data);
+
+            // Handle different event types from streaming API
+            if (parsed.type === 'chunk' && parsed.content) {
+              // Token content
+              fullResponse = parsed.accumulated || '';
+              onChunk(parsed.content, fullResponse);
+            } 
+            else if (parsed.type === 'memories' && onMemories) {
+              // Memory context
+              onMemories(parsed.memories || []);
+            } 
+            else if (parsed.type === 'routing' && onRouting) {
+              // Smart routing decision
+              onRouting(parsed.routing);
+            } 
+            else if (parsed.type === 'tools_enabled' && onTools) {
+              // Function calling enabled
+              onTools(parsed.tools_count || 0);
+            } 
+            else if (parsed.type === 'tool_call' && onToolCall) {
+              // Tool call initiated
+              onToolCall(parsed.tool_call);
+            } 
+            else if (parsed.type === 'tool_result' && onToolResult) {
+              // Tool execution result
+              onToolResult(parsed.name, parsed.result);
+            } 
+            else if (parsed.type === 'complete') {
+              // Streaming complete
+              completionData = parsed;
+            } 
+            else if (parsed.type === 'error') {
+              // Error occurred
+              onError(new Error(parsed.error || 'Unknown streaming error'));
+              return;
             }
+            else if (parsed.type === 'session_id') {
+              // New session created
+              completionData.session_id = parsed.session_id;
+            }
+          } catch (e) {
+            console.error('Failed to parse SSE data:', e, 'Line:', data);
           }
         }
       }
-    } catch (error: any) {
-      onError(error.message || 'Streaming failed');
     }
+
+    // Call completion handler
+    onComplete({
+      response: fullResponse,
+      session_id: completionData.session_id || sessionId,
+      model: completionData.model,
+      provider: completionData.provider,
+      usage: completionData.usage,
+      routing: completionData.routing,
+      toolCalls: completionData.tool_calls || 0,
+    });
+  } catch (error) {
+    console.error('Streaming error:', error);
+    onError(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
+// API endpoints
+export const api = {
+  // Auth endpoints
+  auth: {
+    login: (email: string, password: string) =>
+      chatAPI.post('/auth/login', { email, password }),
+    register: (email: string, password: string, name?: string) =>
+      chatAPI.post('/auth/register', { email, password, name }),
+    logout: () => chatAPI.post('/auth/logout'),
+    verifyToken: () => chatAPI.get('/auth/verify'),
+    me: () => chatAPI.get('/auth/me'),
   },
-  
-  sendMessageWithFiles: (formData: FormData) =>
-    api.post('/chat/with-files', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 120000, // 2 minutes for AI responses with files
-    }),
-  
-  getHistory: (sessionId: string, limit: number = 50) =>
-    api.get(`/chat/history/${sessionId}?limit=${limit}`),
-  
-  getSessions: (params?: {
-    limit?: number;
-    query?: string;
-    search_mode?: string;
-    date_from?: string;
-    date_to?: string;
-    status?: string;
-    sort_by?: string;
-    sort_order?: string;
-  }) =>
-    api.get('/chat/sessions', { params }),
-  
-  updateSession: (sessionId: string, data: {
-    title?: string;
-    category?: string;
-    tags?: string[];
-    status?: string;
-    is_pinned?: boolean;
-    is_favorite?: boolean;
-  }) =>
-    api.put(`/chat/sessions/${sessionId}`, data),
-  
-  deleteSession: (sessionId: string) =>
-    api.delete(`/chat/sessions/${sessionId}`),
-  
-  getSessionSummary: (sessionId: string) =>
-    api.get(`/chat/sessions/${sessionId}/summary`),
-  
-  exportSession: (sessionId: string, data: {
-    format: 'json' | 'txt' | 'markdown';
-    include_metadata?: boolean;
-  }) =>
-    api.post(`/chat/sessions/${sessionId}/export`, data),
-  
-  bulkOperations: (data: {
-    operation: 'archive' | 'delete' | 'tag' | 'untag';
-    session_ids: string[];
-    tag?: string;
-  }) =>
-    api.post('/chat/sessions/bulk', data),
-  
-  // Message reactions
-  addReaction: (messageId: string, reactionType: string) =>
-    api.post(`/chat/messages/${messageId}/reaction`, { reaction_type: reactionType }),
-  
-  getReactions: (messageId: string) =>
-    api.get(`/chat/messages/${messageId}/reactions`),
-  
-  rateMessage: (messageId: string, rating: number) =>
-    api.post(`/chat/messages/${messageId}/rating`, { rating }),
-  
-  // Conversation branching
-  createBranch: (messageId: string, newContent: string, branchName?: string) =>
-    api.post(`/chat/messages/${messageId}/branch`, { new_content: newContent, branch_name: branchName }),
-  
-  getBranches: (sessionId: string) =>
-    api.get(`/chat/sessions/${sessionId}/branches`),
-  
-  activateBranch: (sessionId: string, branchId: string) =>
-    api.put(`/chat/sessions/${sessionId}/branch/${branchId}/activate`),
-};
 
-// Health API
-export const healthAPI = {
-  check: () =>
-    api.get('/health/'),
-  
-  detailed: () =>
-    api.get('/health/detailed'),
-  
-  providers: () =>
-    api.get('/health/providers'),
-};
+  // Chat endpoints
+  chat: {
+    // Regular chat (non-streaming)
+    sendMessage: (message: string, sessionId?: string, files?: File[]) => {
+      const formData = new FormData();
+      formData.append('message', message);
+      if (sessionId) formData.append('session_id', sessionId);
+      if (files) {
+        files.forEach((file) => formData.append('files', file));
+      }
+      return chatAPI.post('/chat/with-files', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+    },
 
-// Admin API
-export const adminAPI = {
-  getUsers: (params?: { skip?: number; limit?: number }) =>
-    api.get('/admin/users', { params }),
-  
-  getUser: (userId: number) =>
-    api.get(`/admin/users/${userId}`),
-  
-  updateUser: (userId: number, data: {
-    email?: string;
-    is_active?: boolean;
-    is_verified?: boolean;
-    is_admin?: boolean;
-  }) =>
-    api.put(`/admin/users/${userId}`, data),
-  
-  deleteUser: (userId: number) =>
-    api.delete(`/admin/users/${userId}`),
-  
-  getStats: () =>
-    api.get('/admin/stats'),
-};
+    // Get conversation history
+    getHistory: (sessionId: string, limit: number = 50) =>
+      chatAPI.get(`/chat/history/${sessionId}`, { params: { limit } }),
 
-// Settings API
-export const settingsAPI = {
-  // Profile
-  getProfile: () =>
-    api.get('/settings/profile'),
-  
-  updateProfile: (data: {
-    full_name?: string;
-    bio?: string;
-    avatar_url?: string;
-    phone?: string;
-    location?: string;
-  }) =>
-    api.put('/settings/profile', data),
-  
-  // Settings
-  getSettings: () =>
-    api.get('/settings/settings'),
-  
-  updateSettings: (data: {
-    appearance?: {
-      theme?: string;
-      glass_style?: string;
-      font_size?: string;
-      accent_color?: string;
-    };
-    notifications?: {
-      email_notifications?: boolean;
-      chat_notifications?: boolean;
-      security_alerts?: boolean;
-    };
-    privacy?: {
-      profile_visibility?: string;
-      show_online_status?: boolean;
-      data_collection?: boolean;
-    };
-    ai_preferences?: {
-      default_model?: string;
-      temperature?: number;
-      max_tokens?: number;
-      stream_responses?: boolean;
-    };
-  }) =>
-    api.put('/settings/settings', data),
-  
-  // Security
-  changePassword: (data: {
-    current_password: string;
-    new_password: string;
-  }) =>
-    api.post('/settings/password/change', data),
-  
-  // Sessions
-  getSessions: () =>
-    api.get('/settings/sessions'),
-  
-  revokeSession: (sessionId: string) =>
-    api.delete(`/settings/sessions/${sessionId}`),
-  
-  // Data Export
-  exportData: () =>
-    api.post('/settings/export/data'),
-  
-  // Account Deletion
-  deleteAccount: (password: string) =>
-    api.delete('/settings/account', {
-      params: { password }
-    }),
-};
+    // Get all sessions with filtering
+    getSessions: (limit: number = 20, query?: string, status?: string) =>
+      chatAPI.get('/chat/sessions', { 
+        params: { 
+          limit, 
+          ...(query && { query }),
+          ...(status && { status })
+        } 
+      }),
 
-// Analytics API
-export const analyticsAPI = {
-  getSummary: (params?: {
-    period?: 'day' | 'week' | 'month' | 'year';
-    start_date?: string;
-    end_date?: string;
-  }) =>
-    api.get('/analytics/summary', { params }),
-  
-  getModelUsage: (params?: { days?: number }) =>
-    api.get('/analytics/models', { params }),
+    // Create new session - Note: Sessions are created automatically by backend
+    // when the user sends their first message via POST /chat
+    // This returns null to indicate no session exists yet
+    createSession: (title: string) => {
+      // Backend creates sessions automatically on first message
+      // Return null session to indicate it will be created on first message
+      return Promise.resolve({
+        data: null
+      });
+    },
+
+    // Delete session
+    deleteSession: (sessionId: string) =>
+      chatAPI.delete(`/chat/sessions/${sessionId}`),
+
+    // Update session (title/name only)
+    updateSession: (sessionId: string, title: string) =>
+      chatAPI.put(`/chat/sessions/${sessionId}`, { name: title }),
+
+    // Get session summary
+    getSessionSummary: (sessionId: string) =>
+      chatAPI.get(`/chat/sessions/${sessionId}/summary`),
+
+    // Export conversation
+    exportSession: (sessionId: string, format: 'json' | 'txt' | 'markdown') =>
+      chatAPI.post(`/chat/sessions/${sessionId}/export`, { format }),
+
+    // Message reactions
+    addReaction: (messageId: string, reactionType: string) =>
+      chatAPI.post(`/chat/messages/${messageId}/reaction`, { reaction_type: reactionType }),
+
+    getReactions: (messageId: string) =>
+      chatAPI.get(`/chat/messages/${messageId}/reactions`),
+
+    // Message rating
+    rateMessage: (messageId: string, rating: number) =>
+      chatAPI.post(`/chat/messages/${messageId}/rating`, { rating }),
+
+    // Message branches
+    createBranch: (messageId: string, newContent: string, branchName?: string) =>
+      chatAPI.post(`/chat/messages/${messageId}/branch`, {
+        new_content: newContent,
+        branch_name: branchName,
+      }),
+
+    getBranches: (sessionId: string) =>
+      chatAPI.get(`/chat/sessions/${sessionId}/branches`),
+
+    activateBranch: (sessionId: string, branchId: string) =>
+      chatAPI.put(`/chat/sessions/${sessionId}/branch/${branchId}/activate`),
+
+    // Routing stats
+    getRoutingStats: () =>
+      chatAPI.get('/chat/routing-stats'),
+
+    // Get available models
+    getModels: () =>
+      chatAPI.get('/chat/models'),
+  },
+
+  // Settings & Configuration endpoints
+  settings: {
+    // Get all user settings (includes AI preferences)
+    getAIPreferences: () =>
+      chatAPI.get('/settings/settings'),
+
+    // Update AI preferences (updates via /settings/settings)
+    updateAIPreferences: (preferences: any) =>
+      chatAPI.put('/settings/settings', {
+        ai_preferences: preferences
+      }),
+
+    // Get appearance settings
+    getAppearance: () =>
+      chatAPI.get('/settings/settings').then(res => ({ data: res.data.appearance })),
+
+    // Update appearance settings
+    updateAppearance: (settings: any) =>
+      chatAPI.put('/settings/settings', { appearance: settings }),
+
+    // Get chat settings
+    getChatSettings: () =>
+      chatAPI.get('/settings/settings').then(res => ({ data: res.data.chat_settings })),
+
+    // Update chat settings
+    updateChatSettings: (settings: any) =>
+      chatAPI.put('/settings/settings', { chat_settings: settings }),
+
+    // Get memory settings
+    getMemorySettings: () =>
+      chatAPI.get('/settings/settings').then(res => ({ data: res.data.memory_settings })),
+
+    // Update memory settings
+    updateMemorySettings: (settings: any) =>
+      chatAPI.put('/settings/settings', { memory_settings: settings }),
+
+    // Get notifications settings
+    getNotifications: () =>
+      chatAPI.get('/settings/settings').then(res => ({ data: res.data.notifications })),
+
+    // Update notifications settings
+    updateNotifications: (settings: any) =>
+      chatAPI.put('/settings/settings', { notifications: settings }),
+
+    // Get profile
+    getProfile: () =>
+      chatAPI.get('/settings/profile'),
+
+    // Update profile
+    updateProfile: (profile: any) =>
+      chatAPI.put('/settings/profile', profile),
+
+    // Change password
+    changePassword: (data: { current_password: string; new_password: string }) =>
+      chatAPI.post('/settings/password/change', data),
+  },
+
+  // Memory endpoints
+  memory: {
+    createMemory: (data: any) =>
+      chatAPI.post('/memory', data),
+
+    getMemory: (memoryId: string) =>
+      chatAPI.get(`/memory/${memoryId}`),
+
+    updateMemory: (memoryId: string, data: any) =>
+      chatAPI.put(`/memory/${memoryId}`, data),
+
+    deleteMemory: (memoryId: string) =>
+      chatAPI.delete(`/memory/${memoryId}`),
+
+    listMemories: (limit?: number, skip?: number, memoryType?: string) =>
+      chatAPI.get('/memory', {
+        params: {
+          ...(limit && { limit }),
+          ...(skip && { skip }),
+          ...(memoryType && { memory_type: memoryType })
+        }
+      }),
+
+    searchMemories: (data: any) =>
+      chatAPI.post('/memory/search', data),
+
+    getMemorySummary: () =>
+      chatAPI.get('/memory/summary'),
+
+    // Memory verification endpoints (Phase 1)
+    verifyMemory: (memoryId: string, data: { action: 'confirm' | 'reject' | 'correct', corrected_content?: string, corrected_importance?: number, corrected_tags?: string[], feedback?: string }) =>
+      chatAPI.post(`/memory/${memoryId}/verify`, data),
+
+    getPendingMemories: (limit?: number) =>
+      chatAPI.get('/memory/pending', { 
+        params: { limit },
+        // Add error handling for 404
+        validateStatus: (status) => status < 500
+      }).then(response => {
+        // If 404, return empty array instead of throwing
+        if (response.status === 404) {
+          console.warn('Memory pending endpoint not found - feature may not be available');
+          return { data: [] };
+        }
+        return response;
+      }),
+
+    // Memory relationships endpoints (Phase 3)
+    linkMemories: (data: { source_id: string, target_id: string, relationship_type: string }) =>
+      chatAPI.post('/memory/link', data),
+
+    getRelatedMemories: (memoryId: string, relationshipType?: string, depth?: number) =>
+      chatAPI.get(`/memory/${memoryId}/related`, {
+        params: { 
+          ...(relationshipType && { relationship_type: relationshipType }),
+          ...(depth && { depth })
+        }
+      }),
+
+    getMemoryGraph: (memoryId: string, maxDepth?: number) =>
+      chatAPI.get(`/memory/${memoryId}/graph`, { params: { max_depth: maxDepth } }),
+
+    // Memory conflicts endpoints (Phase 4)
+    detectConflicts: (memoryId?: string) =>
+      chatAPI.get('/memory/conflicts/detect', { params: { memory_id: memoryId } }),
+
+    consolidateMemories: (memoryIds: string[]) =>
+      chatAPI.post('/memory/consolidate', { memory_ids: memoryIds }),
+
+    getConsolidationSuggestions: (limit?: number) =>
+      chatAPI.get('/memory/consolidate/suggestions', { params: { limit } }),
+
+    classifyExpiration: (memoryIds?: string[]) =>
+      chatAPI.post('/memory/classify-expiration', { memory_ids: memoryIds }),
+
+    // Memory analytics endpoints (Phase 5)
+    getAnalyticsDashboard: (timeRange?: string) =>
+      chatAPI.get('/memory/analytics/dashboard', { params: { time_range: timeRange } }),
+
+    getTopMemories: (metric?: string, limit?: number) =>
+      chatAPI.get('/memory/analytics/top', {
+        params: {
+          ...(metric && { metric }),
+          ...(limit && { limit })
+        }
+      }),
+
+    // Advanced features endpoints (Phase 6)
+    exportMemories: (data: { format: 'json' | 'csv', include_relationships?: boolean, filter_by_status?: string, filter_by_type?: string }) =>
+      chatAPI.post('/memory/export', data),
+
+    importMemories: (data: { memories: any[], format: 'json' | 'csv', merge_strategy?: string }) =>
+      chatAPI.post('/memory/import', data),
+
+    setPrivacySettings: (data: { memory_ids: string[], is_private: boolean, shared_with?: string[] }) =>
+      chatAPI.post('/memory/privacy', data),
+
+    bulkDelete: (data: { memory_ids?: string[], filter_criteria?: any }) =>
+      chatAPI.delete('/memory/bulk', { data }),
+  },
+
+  // Health check
+  health: {
+    check: () =>
+      chatAPI.get('/health'),
+  },
 };
 
 export default api;

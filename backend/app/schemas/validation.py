@@ -140,6 +140,7 @@ class ChatRequest(BaseModel):
     max_tokens: Optional[Annotated[int, Field(ge=1, le=4000)]] = Field(1000, description="Maximum tokens in response (1-4000)")
     temperature: Optional[Annotated[float, Field(ge=0.0, le=2.0)]] = Field(0.7, description="Creativity/randomness (0.0-2.0)")
     model: Optional[str] = Field(None, description="Specific AI model to use (e.g., 'llama-3.1-8b-instant', 'grok-4-fast', etc.)")
+    optimize_for: Optional[str] = Field("balanced", description="Routing optimization strategy: 'cost', 'quality', or 'balanced'")
 
     @field_validator('message')
     @classmethod
@@ -205,6 +206,10 @@ class ChatResponse(BaseModel):
     request_type: Optional[str] = Field(None, description="Detected request type")
     usage: Optional[dict] = Field(None, description="Token usage statistics")
     conversation_type: ConversationType = Field(..., description="Conversation type used")
+    used_memories: Optional[list[dict]] = Field(
+        default=None,
+        description="Memories that influenced this response (id, content, type, importance)"
+    )
 
 
 class ConversationHistoryResponse(BaseModel):
@@ -256,11 +261,6 @@ class ResendVerificationRequest(BaseModel):
         if v not in ["otp", "token"]:
             raise ValidationError("Verification method must be 'otp' or 'token'")
         return v
-
-
-class SessionUpdateRequest(BaseModel):
-    """Session update request."""
-    name: Optional[str] = Field(None, min_length=1, max_length=100, description="Session name/title")
 
 
 class SessionSummaryResponse(BaseModel):

@@ -253,7 +253,12 @@ async def login(request: LoginRequest):
         return {
             "access_token": token,
             "token_type": "bearer",
-            "expires_in": 60 * 30
+            "expires_in": 60 * 30,
+            "user": {
+                "id": user_id,
+                "email": user.get("email"),
+                "name": user.get("name", "")
+            }
         }
         
     except HTTPException:
@@ -646,3 +651,40 @@ async def logout(request: Request):
     except Exception as e:
         logger.error(f"Logout error: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Logout failed")
+
+
+# Development/Debug endpoint - only enable in development mode
+@router.post("/dev/verify-user")
+async def dev_verify_user(email: str):
+    """
+    Development endpoint to auto-verify a user account for testing.
+    ONLY available in development/testing mode.
+    """
+    try:
+        logger.info(f"Dev: Auto-verifying user {email}")
+        users_collection = get_users_collection()
+        
+        user = await users_collection.find_one({"email": email})
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        
+        # Mark user as verified
+        await users_collection.update_one(
+            {"email": email},
+            {
+                "$set": {
+                    "is_verified": True,
+                    "updated_at": datetime.utcnow()
+                },
+                "$unset": {"otp": "", "otp_expires_at": "", "verification_token": ""}
+            }
+        )
+        
+        logger.info(f"Dev: User {email} verified successfully")
+        return {"message": f"User {email} verified successfully", "email": email}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Dev verify error: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Verification failed")

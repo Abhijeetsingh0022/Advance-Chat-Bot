@@ -1,8 +1,19 @@
+/**
+ * Zustand Store
+ * Global state management for authentication and settings
+ */
+
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { User, AppSettings } from '@/types';
 
-interface AuthStore {
+// Auth store types
+interface User {
+  id: string;
+  email: string;
+  name?: string;
+}
+
+interface AuthState {
   user: User | null;
   token: string | null;
   isAuthenticated: boolean;
@@ -11,30 +22,21 @@ interface AuthStore {
   logout: () => void;
 }
 
-export const useAuthStore = create<AuthStore>()(
+// Auth store
+export const useAuthStore = create<AuthState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       user: null,
       token: null,
       isAuthenticated: false,
-      setUser: (user) => {
-        console.log('Setting user:', user?.email || 'null');
-        set({ user, isAuthenticated: !!user });
-      },
-      setToken: (token) => {
-        console.log('Setting token in store:', token ? 'exists' : 'null');
-        if (token) {
-          set({ token, isAuthenticated: true });
-          console.log('Token saved to store, isAuthenticated: true');
-        } else {
-          set({ token: null, isAuthenticated: false });
-          console.log('Token removed from store, isAuthenticated: false');
-        }
-      },
+      setUser: (user) => set({ user, isAuthenticated: !!user || !!get().token }),
+      setToken: (token) => set({ token, isAuthenticated: !!token || !!get().user }),
       logout: () => {
-        console.log('Logging out...');
+        // Clear auth cookie for middleware
+        if (typeof document !== 'undefined') {
+          document.cookie = 'auth-token=; path=/; max-age=0';
+        }
         set({ user: null, token: null, isAuthenticated: false });
-        console.log('Logout complete - all data cleared');
       },
     }),
     {
@@ -43,51 +45,37 @@ export const useAuthStore = create<AuthStore>()(
   )
 );
 
-interface SettingsStore extends AppSettings {
-  setTheme: (theme: 'light' | 'dark') => void;
+// Settings store types
+type ThemeMode = 'light' | 'dark';
+type GlassStyle = 'soft' | 'medium' | 'strong';
+type FontSize = 'sm' | 'base' | 'lg' | 'xl';
+type AccentColor = 'blue' | 'purple' | 'pink' | 'green' | 'orange' | 'red';
+
+interface SettingsState {
+  theme: ThemeMode;
+  glassStyle: GlassStyle;
+  fontSize: FontSize;
+  accentColor: AccentColor;
+  setTheme: (theme: ThemeMode) => void;
+  setGlassStyle: (style: GlassStyle) => void;
+  setFontSize: (size: FontSize) => void;
+  setAccentColor: (color: AccentColor) => void;
   toggleTheme: () => void;
-  setSidebarCollapsed: (collapsed: boolean) => void;
-  toggleSidebar: () => void;
-  updateSettings: (settings: Partial<AppSettings>) => void;
-  // Theme customization
-  glassStyle: 'default' | 'strong' | 'subtle' | 'vibrant';
-  fontSize: 'small' | 'medium' | 'large';
-  accentColor: 'gray' | 'blue' | 'purple' | 'green' | 'red';
-  setGlassStyle: (style: 'default' | 'strong' | 'subtle' | 'vibrant') => void;
-  setFontSize: (size: 'small' | 'medium' | 'large') => void;
-  setAccentColor: (color: 'gray' | 'blue' | 'purple' | 'green' | 'red') => void;
 }
 
-export const useSettingsStore = create<SettingsStore>()(
+// Settings store
+export const useSettingsStore = create<SettingsState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       theme: 'dark',
-      sidebarCollapsed: false,
-      autoSave: true,
-      notifications: true,
-      glassStyle: 'default',
-      fontSize: 'medium',
-      accentColor: 'gray',
-      setTheme: (theme) => {
-        set({ theme });
-        if (typeof window !== 'undefined') {
-          if (theme === 'dark') {
-            document.documentElement.classList.add('dark');
-          } else {
-            document.documentElement.classList.remove('dark');
-          }
-        }
-      },
-      toggleTheme: () => {
-        const newTheme = get().theme === 'dark' ? 'light' : 'dark';
-        get().setTheme(newTheme);
-      },
-      setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
-      toggleSidebar: () => set({ sidebarCollapsed: !get().sidebarCollapsed }),
-      updateSettings: (settings) => set(settings),
+      glassStyle: 'medium',
+      fontSize: 'base',
+      accentColor: 'purple',
+      setTheme: (theme) => set({ theme }),
       setGlassStyle: (glassStyle) => set({ glassStyle }),
       setFontSize: (fontSize) => set({ fontSize }),
       setAccentColor: (accentColor) => set({ accentColor }),
+      toggleTheme: () => set((state) => ({ theme: state.theme === 'light' ? 'dark' : 'light' })),
     }),
     {
       name: 'settings-storage',

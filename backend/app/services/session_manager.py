@@ -409,6 +409,27 @@ class SessionManager:
             logger.error(f"Unexpected error while adding message to session {message.session_id}: {e}")
             raise DatabaseError(f"Failed to add message: {str(e)}")
 
+    async def update_message_tokens(self, message_id: str, token_count: Optional[int]) -> bool:
+        """Update the token count for a specific message."""
+        if token_count is None:
+            return False
+
+        try:
+            from bson import ObjectId
+            result = await self.messages_collection.update_one(
+                {"_id": ObjectId(message_id)},
+                {"$set": {"token_count": token_count, "updated_at": datetime.utcnow()}}
+            )
+            
+            success = result.modified_count > 0
+            if success:
+                logger.info(f"Updated token count ({token_count}) for message {message_id}")
+            return success
+
+        except Exception as e:
+            logger.error(f"Failed to update token count for message {message_id}: {e}")
+            return False
+
     @log_performance("get_messages")
     async def get_messages(self, user_id: str, session_id: str, limit: int = 50, skip: int = 0) -> List[MessageDocument]:
         """Get messages for a session."""

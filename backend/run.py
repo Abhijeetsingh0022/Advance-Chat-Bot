@@ -3,6 +3,10 @@
 Run the FastAPI application
 """
 import uvicorn
+from dotenv import load_dotenv
+
+# Load environment variables before starting the app
+load_dotenv()
 
 if __name__ == "__main__":
     uvicorn.run(
