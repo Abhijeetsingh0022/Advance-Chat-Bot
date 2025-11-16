@@ -186,6 +186,86 @@ class MongoDBManager:
                 ("user_id", 1)
             ], name="title_description_text_user")
 
+            # User memories collection indexes
+            user_memories_collection = self.database.user_memories
+            
+            # Primary query index: user_id + importance + relevance_score
+            await user_memories_collection.create_index([
+                ("user_id", 1),
+                ("importance", -1),
+                ("relevance_score", -1)
+            ], name="user_importance_relevance")
+            
+            # Filter and sort index: user_id + memory_type + created_at
+            await user_memories_collection.create_index([
+                ("user_id", 1),
+                ("memory_type", 1),
+                ("created_at", -1)
+            ], name="user_type_created")
+            
+            # Decay operations index: user_id + last_accessed
+            await user_memories_collection.create_index([
+                ("user_id", 1),
+                ("last_accessed", 1)
+            ], name="user_last_accessed")
+            
+            # Category filter index
+            await user_memories_collection.create_index([
+                ("user_id", 1),
+                ("category", 1)
+            ], name="user_category")
+            
+            # Tags multikey index for tag searches
+            await user_memories_collection.create_index(
+                "tags",
+                name="tags_multikey"
+            )
+            
+            # TTL index for auto-cleanup of expired memories
+            await user_memories_collection.create_index(
+                "expires_at",
+                expireAfterSeconds=0,
+                name="memory_ttl"
+            )
+            
+            # Text search index for content
+            await user_memories_collection.create_index([
+                ("content", "text"),
+                ("user_id", 1)
+            ], name="content_text_user")
+            
+            # Phase 2: Context-based indexes for contextual memory retrieval
+            await user_memories_collection.create_index([
+                ("user_id", 1),
+                ("contexts", 1),
+                ("importance", -1)
+            ], name="user_contexts_importance")
+            
+            # Phase 2: Time-context index
+            await user_memories_collection.create_index([
+                ("user_id", 1),
+                ("time_context", 1)
+            ], name="user_time_context")
+            
+            # Phase 2: Verification status index
+            await user_memories_collection.create_index([
+                ("user_id", 1),
+                ("status", 1),
+                ("verified_at", -1)
+            ], name="user_status_verified")
+            
+            # Phase 3: Relationship indexes for graph traversal
+            await user_memories_collection.create_index([
+                ("user_id", 1),
+                ("relationships.memory_id", 1)
+            ], name="user_relationship_targets")
+            
+            # Phase 3: Related memories index (backward compatibility)
+            await user_memories_collection.create_index([
+                ("user_id", 1),
+                ("related_memories", 1)
+            ], name="user_related_memories")
+
             logger.info("Database indexes created successfully")
 
         except Exception as e:

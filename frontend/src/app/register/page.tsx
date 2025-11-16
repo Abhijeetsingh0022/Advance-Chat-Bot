@@ -1,298 +1,568 @@
+/**
+ * Register Page
+ * Premium account creation with black & white theme
+ */
+
 'use client';
 
-import { useState, FormEvent } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { authAPI } from '@/lib/api';
+import axios from 'axios';
 import toast from 'react-hot-toast';
-import { EnvelopeIcon, LockClosedIcon, EyeIcon, EyeSlashIcon, CheckCircleIcon, UserPlusIcon } from '@heroicons/react/24/outline';
+import {
+  SparklesIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+  UserIcon,
+  EnvelopeIcon,
+  LockClosedIcon,
+  ArrowRightIcon,
+  HomeIcon,
+} from '@heroicons/react/24/outline';
+
+import { useAuthStore } from '@/store';
+
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+
+type RegisterErrors = {
+  name?: string;
+  email?: string;
+  password?: string;
+  confirmPassword?: string;
+  form?: string;
+};
+
+const passwordRequirements = [
+  { regex: /.{8,}/, label: 'At least 8 characters' },
+  { regex: /[A-Z]/, label: 'One uppercase letter' },
+  { regex: /[a-z]/, label: 'One lowercase letter' },
+  { regex: /[0-9]/, label: 'One number' },
+];
 
 export default function RegisterPage() {
   const router = useRouter();
+  const { setUser, setToken } = useAuthStore();
+
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [verificationType, setVerificationType] = useState<'otp' | 'token'>('otp');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [passwordStrength, setPasswordStrength] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errors, setErrors] = useState<RegisterErrors>({});
+  const [touched, setTouched] = useState({
+    name: false,
+    email: false,
+    password: false,
+    confirmPassword: false,
+  });
 
-  const calculatePasswordStrength = (pwd: string) => {
-    let strength = 0;
-    if (pwd.length >= 8) strength++;
-    if (pwd.length >= 12) strength++;
-    if (/[a-z]/.test(pwd) && /[A-Z]/.test(pwd)) strength++;
-    if (/\d/.test(pwd)) strength++;
-    if (/[^a-zA-Z0-9]/.test(pwd)) strength++;
-    setPasswordStrength(strength);
+  const passwordScore = useMemo(
+    () => passwordRequirements.filter((req) => req.regex.test(password)).length,
+    [password]
+  );
+
+  const getPasswordStrength = (score: number) => {
+    if (score === 0) return { label: 'Weak', color: 'bg-red-500' };
+    if (score <= 2) return { label: 'Fair', color: 'bg-yellow-500' };
+    if (score === 3) return { label: 'Good', color: 'bg-blue-500' };
+    return { label: 'Strong', color: 'bg-green-500' };
   };
 
-  const handlePasswordChange = (pwd: string) => {
-    setPassword(pwd);
-    calculatePasswordStrength(pwd);
-  };
+  const validateForm = useCallback(() => {
+    const nextErrors: RegisterErrors = {};
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+    const trimmedName = name.trim();
+    const trimmedEmail = email.trim();
 
-    if (password !== confirmPassword) {
-      toast.error('Passwords do not match');
-      return;
+    if (!trimmedName) {
+      nextErrors.name = 'Name is required';
+    } else if (trimmedName.length < 2) {
+      nextErrors.name = 'Name must be at least 2 characters';
     }
 
-    if (password.length < 8) {
-      toast.error('Password must be at least 8 characters');
-      return;
+    if (!trimmedEmail) {
+      nextErrors.email = 'Email is required';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      nextErrors.email = 'Invalid email format';
     }
 
-    setLoading(true);
+    if (!password) {
+      nextErrors.password = 'Password is required';
+    } else if (password.length < 8) {
+      nextErrors.password = 'Password must be at least 8 characters';
+    } else if (passwordScore < 3) {
+      nextErrors.password = 'Password is too weak';
+    }
 
-    try {
-      await authAPI.register({
-        email,
-        password,
-        verification_method: verificationType,
-      });
+    if (!confirmPassword) {
+      nextErrors.confirmPassword = 'Please confirm your password';
+    } else if (password !== confirmPassword) {
+      nextErrors.confirmPassword = 'Passwords do not match';
+    }
 
-      toast.success('Registration successful! Please check your email for verification.');
-      
-      if (verificationType === 'otp') {
-        router.push(`/verify-otp?email=${encodeURIComponent(email)}`);
-      } else {
-        router.push('/login');
+    setErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  }, [name, email, password, confirmPassword, passwordScore]);
+
+  const handleSubmit = useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+
+      // Mark all as touched
+      setTouched({ name: true, email: true, password: true, confirmPassword: true });
+
+      if (!validateForm()) return;
+
+      setIsLoading(true);
+      setErrors({});
+
+      try {
+        const response = await axios.post(`${API_BASE_URL}/auth/register`, {
+          name: name.trim(),
+          email: email.trim(),
+          password,
+        });
+
+        const { access_token, user } = response.data ?? {};
+
+        if (!access_token || !user) {
+          throw new Error('Invalid response from server');
+        }
+
+        setToken(access_token);
+        setUser({
+          id: user.id,
+          email: user.email,
+          name: user.name || '',
+        });
+
+        const maxAgeSeconds = 7 * 24 * 60 * 60;
+        document.cookie = [
+          `auth-token=${access_token}`,
+          'path=/',
+          `max-age=${maxAgeSeconds}`,
+          'SameSite=Lax',
+        ].join('; ');
+
+        toast.success(`Welcome, ${user.name}!`);
+        router.push('/chat');
+      } catch (err: unknown) {
+        const axiosError = err as any;
+        const apiMessage =
+          axiosError?.response?.data?.detail ||
+          axiosError?.response?.data?.message;
+        const message = apiMessage || 'Registration failed. Please try again.';
+
+        setErrors((prev) => ({
+          ...prev,
+          form: message,
+        }));
+
+        toast.error(message);
+      } finally {
+        setIsLoading(false);
       }
-    } catch (error: any) {
-      console.error('Registration error:', error);
-      const message = error.response?.data?.message || error.response?.data?.detail || 'Registration failed';
-      toast.error(message);
-    } finally {
-      setLoading(false);
-    }
-  };
+    },
+    [name, email, password, validateForm, setToken, setUser, router]
+  );
 
-  const getStrengthColor = () => {
-    if (passwordStrength <= 1) return 'bg-gray-400 dark:bg-gray-600';
-    if (passwordStrength <= 3) return 'bg-gray-600 dark:bg-gray-400';
-    return 'bg-black dark:bg-white';
-  };
+  const handleBlur = useCallback((field: keyof typeof touched) => {
+    setTouched((prev) => ({ ...prev, [field]: true }));
+  }, []);
 
-  const getStrengthText = () => {
-    if (passwordStrength <= 1) return 'Weak';
-    if (passwordStrength <= 3) return 'Medium';
-    return 'Strong';
-  };
+  const handleNameChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setName(event.target.value);
+      if (errors.name || errors.form) {
+        setErrors((prev) => ({ ...prev, name: undefined, form: undefined }));
+      }
+    },
+    [errors.name, errors.form]
+  );
+
+  const handleEmailChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setEmail(event.target.value);
+      if (errors.email || errors.form) {
+        setErrors((prev) => ({ ...prev, email: undefined, form: undefined }));
+      }
+    },
+    [errors.email, errors.form]
+  );
+
+  const handlePasswordChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setPassword(event.target.value);
+      if (errors.password || errors.form) {
+        setErrors((prev) => ({
+          ...prev,
+          password: undefined,
+          form: undefined,
+        }));
+      }
+    },
+    [errors.password, errors.form]
+  );
+
+  const handleConfirmPasswordChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setConfirmPassword(event.target.value);
+      if (errors.confirmPassword || errors.form) {
+        setErrors((prev) => ({
+          ...prev,
+          confirmPassword: undefined,
+          form: undefined,
+        }));
+      }
+    },
+    [errors.confirmPassword, errors.form]
+  );
+
+  const togglePasswordVisibility = useCallback(() => {
+    setShowPassword((prev) => !prev);
+  }, []);
+
+  const toggleConfirmPasswordVisibility = useCallback(() => {
+    setShowConfirmPassword((prev) => !prev);
+  }, []);
+
+  const isNameValid = name.trim().length >= 2;
+  const isEmailValid = email.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  const isPasswordValid = passwordScore >= 3;
+  const isConfirmPasswordValid = confirmPassword && password === confirmPassword;
+  const isSubmitDisabled = isLoading || !isNameValid || !isEmailValid || !isPasswordValid || !isConfirmPasswordValid;
+
+  const strength = getPasswordStrength(passwordScore);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-gray-950 dark:via-black dark:to-gray-900 p-4">
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-50 to-white px-4 py-8 dark:from-gray-950 dark:to-black">
       <div className="w-full max-w-md">
+        {/* Back to Home Link */}
+        <div className="mb-6">
+          <Link
+            href="/"
+            className="inline-flex items-center gap-2 text-sm font-medium text-gray-600 transition-colors hover:text-black dark:text-gray-400 dark:hover:text-white"
+          >
+            <HomeIcon className="h-4 w-4" />
+            Back to Home
+          </Link>
+        </div>
+
         {/* Header */}
-        <div className="text-center mb-8 animate-fade-in">
-          <div className="w-20 h-20 mx-auto mb-6 rounded-3xl bg-gradient-to-br from-black to-gray-700 dark:from-white dark:to-gray-300 flex items-center justify-center shadow-2xl transform hover:scale-105 transition-transform">
-            <UserPlusIcon className="w-10 h-10 text-white dark:text-black" />
+        <div className="mb-10 text-center">
+          <div className="mx-auto mb-6 inline-flex h-20 w-20 items-center justify-center rounded-2xl bg-black shadow-2xl dark:bg-white">
+            <SparklesIcon className="h-10 w-10 text-white dark:text-black" />
           </div>
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-black to-gray-700 dark:from-white dark:to-gray-300 bg-clip-text text-transparent mb-3">
-            Create Account
+          <h1 className="mb-3 text-4xl font-bold text-black dark:text-white">
+            Join ChatBot
           </h1>
-          <p className="text-gray-600 dark:text-gray-400 text-base">
-            Start your AI-powered conversation journey
+          <p className="text-base text-gray-600 dark:text-gray-400">
+            Create your account to get started
           </p>
         </div>
 
-        {/* Register Form */}
-        <div className="backdrop-blur-xl bg-white/70 dark:bg-black/70 border border-gray-200/50 dark:border-gray-800/50 rounded-3xl p-8 animate-fade-in shadow-2xl">
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Email Input */}
-            <div>
-              <label htmlFor="email" className="block text-sm font-bold mb-2 text-black dark:text-white">
-                Email Address
-              </label>
-              <div className="relative">
-                <EnvelopeIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full pl-12 pr-4 py-3 backdrop-blur-xl bg-white/70 dark:bg-black/70 border border-gray-200/50 dark:border-gray-800/50 rounded-2xl focus:outline-none focus:border-gray-400 dark:focus:border-gray-600 text-black dark:text-white placeholder-gray-400 transition-all shadow-lg focus:shadow-xl"
-                  placeholder="you@example.com"
-                  required
-                  autoComplete="email"
-                />
+        {/* Sign Up Form */}
+        <form
+          onSubmit={handleSubmit}
+          className="space-y-5"
+          noValidate
+          aria-describedby={errors.form ? 'register-form-error' : undefined}
+        >
+          {/* Form error */}
+          {errors.form && (
+            <div
+              id="register-form-error"
+              className="animate-fade-in rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-400"
+            >
+              <div className="flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-red-500" />
+                {errors.form}
               </div>
             </div>
+          )}
 
-            {/* Password Input */}
-            <div>
-              <label htmlFor="password" className="block text-sm font-bold mb-2 text-black dark:text-white">
-                Password
-              </label>
-              <div className="relative">
-                <LockClosedIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                <input
-                  id="password"
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => handlePasswordChange(e.target.value)}
-                  className="w-full pl-12 pr-12 py-3 backdrop-blur-xl bg-white/70 dark:bg-black/70 border border-gray-200/50 dark:border-gray-800/50 rounded-2xl focus:outline-none focus:border-gray-400 dark:focus:border-gray-600 text-black dark:text-white placeholder-gray-400 transition-all shadow-lg focus:shadow-xl"
-                  placeholder="At least 8 characters"
-                  required
-                  autoComplete="new-password"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black dark:hover:text-white transition-colors"
-                >
-                  {showPassword ? (
-                    <EyeSlashIcon className="w-5 h-5" />
-                  ) : (
-                    <EyeIcon className="w-5 h-5" />
-                  )}
-                </button>
-              </div>
-              
-              {/* Password Strength Indicator */}
-              {password && (
-                <div className="mt-3">
-                  <div className="flex items-center justify-between text-xs mb-2">
-                    <span className="text-gray-600 dark:text-gray-400 font-medium">
-                      Password Strength
-                    </span>
-                    <span className={`font-bold ${
-                      passwordStrength <= 1 ? 'text-gray-400' :
-                      passwordStrength <= 3 ? 'text-gray-600 dark:text-gray-400' :
-                      'text-black dark:text-white'
-                    }`}>
-                      {getStrengthText()}
-                    </span>
+          {/* Name Field */}
+          <div>
+            <label
+              htmlFor="name"
+              className="mb-2 block text-sm font-semibold text-black dark:text-white"
+            >
+              Full Name
+            </label>
+            <div className="relative">
+              <UserIcon className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+              <input
+                id="name"
+                type="text"
+                value={name}
+                onChange={handleNameChange}
+                onBlur={() => handleBlur('name')}
+                placeholder="John Doe"
+                autoComplete="name"
+                className={[
+                  'w-full rounded-xl border-2 bg-white px-4 py-3.5 pl-11 pr-11 text-black placeholder-gray-400 transition-all focus:outline-none dark:bg-black dark:text-white dark:placeholder-gray-600',
+                  touched.name && errors.name
+                    ? 'border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border-gray-200 focus:border-black focus:ring-4 focus:ring-black/5 dark:border-gray-800 dark:focus:border-white dark:focus:ring-white/5',
+                ].join(' ')}
+                disabled={isLoading}
+                aria-invalid={!!(touched.name && errors.name)}
+                aria-describedby={touched.name && errors.name ? 'name-error' : undefined}
+              />
+              {isNameValid && (
+                <CheckCircleIcon className="pointer-events-none absolute right-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-green-500" />
+              )}
+            </div>
+            {touched.name && errors.name && (
+              <p id="name-error" className="mt-2 text-sm text-red-500">
+                {errors.name}
+              </p>
+            )}
+          </div>
+
+          {/* Email Field */}
+          <div>
+            <label
+              htmlFor="email"
+              className="mb-2 block text-sm font-semibold text-black dark:text-white"
+            >
+              Email Address
+            </label>
+            <div className="relative">
+              <EnvelopeIcon className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+              <input
+                id="email"
+                type="email"
+                value={email}
+                onChange={handleEmailChange}
+                onBlur={() => handleBlur('email')}
+                placeholder="you@example.com"
+                autoComplete="email"
+                className={[
+                  'w-full rounded-xl border-2 bg-white px-4 py-3.5 pl-11 pr-11 text-black placeholder-gray-400 transition-all focus:outline-none dark:bg-black dark:text-white dark:placeholder-gray-600',
+                  touched.email && errors.email
+                    ? 'border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border-gray-200 focus:border-black focus:ring-4 focus:ring-black/5 dark:border-gray-800 dark:focus:border-white dark:focus:ring-white/5',
+                ].join(' ')}
+                disabled={isLoading}
+                aria-invalid={!!(touched.email && errors.email)}
+                aria-describedby={touched.email && errors.email ? 'email-error' : undefined}
+              />
+              {isEmailValid && (
+                <CheckCircleIcon className="pointer-events-none absolute right-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-green-500" />
+              )}
+            </div>
+            {touched.email && errors.email && (
+              <p id="email-error" className="mt-2 text-sm text-red-500">
+                {errors.email}
+              </p>
+            )}
+          </div>
+
+          {/* Password Field */}
+          <div>
+            <label
+              htmlFor="password"
+              className="mb-2 block text-sm font-semibold text-black dark:text-white"
+            >
+              Password
+            </label>
+            <div className="relative">
+              <LockClosedIcon className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+              <input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={handlePasswordChange}
+                onBlur={() => handleBlur('password')}
+                placeholder="Create a strong password"
+                autoComplete="new-password"
+                className={[
+                  'w-full rounded-xl border-2 bg-white px-4 py-3.5 pl-11 pr-11 text-black placeholder-gray-400 transition-all focus:outline-none dark:bg-black dark:text-white dark:placeholder-gray-600',
+                  touched.password && errors.password
+                    ? 'border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border-gray-200 focus:border-black focus:ring-4 focus:ring-black/5 dark:border-gray-800 dark:focus:border-white dark:focus:ring-white/5',
+                ].join(' ')}
+                disabled={isLoading}
+                aria-invalid={!!(touched.password && errors.password)}
+                aria-describedby={touched.password && errors.password ? 'password-error' : undefined}
+              />
+              <button
+                type="button"
+                onClick={togglePasswordVisibility}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-900 dark:hover:text-gray-300"
+                tabIndex={-1}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? (
+                  <EyeSlashIcon className="h-4 w-4" />
+                ) : (
+                  <EyeIcon className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+
+            {/* Password Strength Indicator */}
+            {password && (
+              <div className="mt-3 space-y-3">
+                {/* Strength bar */}
+                <div>
+                  <div className="mb-2 flex items-center justify-between text-xs">
+                    <span className="text-gray-600 dark:text-gray-400">Password Strength</span>
+                    <span className="font-medium text-black dark:text-white">{strength.label}</span>
                   </div>
-                  <div className="w-full h-2 bg-gray-200/70 dark:bg-gray-800/70 rounded-full overflow-hidden backdrop-blur-xl">
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-800">
                     <div
-                      className={`h-full transition-all duration-300 ${getStrengthColor()}`}
-                      style={{ width: `${(passwordStrength / 5) * 100}%` }}
+                      className={`h-full transition-all ${strength.color}`}
+                      style={{ width: `${(passwordScore / 4) * 100}%` }}
                     />
                   </div>
                 </div>
-              )}
-            </div>
 
-            {/* Confirm Password Input */}
-            <div>
-              <label htmlFor="confirmPassword" className="block text-sm font-bold mb-2 text-black dark:text-white">
-                Confirm Password
-              </label>
-              <div className="relative">
-                <LockClosedIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                <input
-                  id="confirmPassword"
-                  type={showConfirmPassword ? 'text' : 'password'}
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="w-full pl-12 pr-12 py-3 backdrop-blur-xl bg-white/70 dark:bg-black/70 border border-gray-200/50 dark:border-gray-800/50 rounded-2xl focus:outline-none focus:border-gray-400 dark:focus:border-gray-600 text-black dark:text-white placeholder-gray-400 transition-all shadow-lg focus:shadow-xl"
-                  placeholder="Re-enter your password"
-                  required
-                  autoComplete="new-password"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black dark:hover:text-white transition-colors"
-                >
-                  {showConfirmPassword ? (
-                    <EyeSlashIcon className="w-5 h-5" />
-                  ) : (
-                    <EyeIcon className="w-5 h-5" />
-                  )}
-                </button>
+                {/* Requirements checklist */}
+                <div className="space-y-1.5">
+                  {passwordRequirements.map((req, index) => {
+                    const satisfied = req.regex.test(password);
+                    return (
+                      <div key={index} className="flex items-center gap-2 text-xs">
+                        {satisfied ? (
+                          <CheckCircleIcon className="h-4 w-4 flex-shrink-0 text-green-500" />
+                        ) : (
+                          <XCircleIcon className="h-4 w-4 flex-shrink-0 text-gray-300 dark:text-gray-700" />
+                        )}
+                        <span
+                          className={
+                            satisfied
+                              ? 'text-green-600 dark:text-green-400'
+                              : 'text-gray-500 dark:text-gray-500'
+                          }
+                        >
+                          {req.label}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-              {confirmPassword && password !== confirmPassword && (
-                <p className="mt-2 text-xs text-gray-600 dark:text-gray-400">Passwords do not match</p>
-              )}
-            </div>
+            )}
 
-            {/* Verification Method */}
-            <div>
-              <label className="block text-sm font-bold mb-3 text-black dark:text-white">
-                Verification Method
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => setVerificationType('otp')}
-                  className={`p-4 rounded-2xl border backdrop-blur-xl transition-all transform hover:scale-105 shadow-lg ${
-                    verificationType === 'otp'
-                      ? 'border-gray-700/50 dark:border-gray-400/50 bg-gradient-to-br from-black to-gray-700 dark:from-white dark:to-gray-300 text-white dark:text-black'
-                      : 'border-gray-200/50 dark:border-gray-800/50 bg-white/70 dark:bg-black/70 hover:border-gray-400 dark:hover:border-gray-600'
-                  }`}
-                >
-                  <div className="flex items-center justify-center">
-                    {verificationType === 'otp' && (
-                      <CheckCircleIcon className="w-5 h-5 mr-2" />
-                    )}
-                    <span className="font-bold">OTP Code</span>
-                  </div>
-                  <p className="text-xs mt-2 opacity-80">
-                    6-digit code
-                  </p>
-                </button>
-                
-                <button
-                  type="button"
-                  onClick={() => setVerificationType('token')}
-                  className={`p-4 rounded-2xl border backdrop-blur-xl transition-all transform hover:scale-105 shadow-lg ${
-                    verificationType === 'token'
-                      ? 'border-gray-700/50 dark:border-gray-400/50 bg-gradient-to-br from-black to-gray-700 dark:from-white dark:to-gray-300 text-white dark:text-black'
-                      : 'border-gray-200/50 dark:border-gray-800/50 bg-white/70 dark:bg-black/70 hover:border-gray-400 dark:hover:border-gray-600'
-                  }`}
-                >
-                  <div className="flex items-center justify-center">
-                    {verificationType === 'token' && (
-                      <CheckCircleIcon className="w-5 h-5 mr-2" />
-                    )}
-                    <span className="font-bold">Email Link</span>
-                  </div>
-                  <p className="text-xs mt-2 opacity-80">
-                    Click to verify
-                  </p>
-                </button>
-              </div>
-            </div>
-
-            {/* Submit Button */}
-            <button
-              type="submit"
-              disabled={loading || password !== confirmPassword}
-              className="w-full bg-gradient-to-br from-black to-gray-700 dark:from-white dark:to-gray-300 text-white dark:text-black py-4 px-6 border border-gray-700/50 dark:border-gray-400/50 rounded-2xl hover:from-gray-700 hover:to-black dark:hover:from-gray-300 dark:hover:to-white transition-all disabled:opacity-50 disabled:cursor-not-allowed font-bold shadow-xl hover:shadow-2xl transform hover:scale-105 disabled:hover:scale-100"
-            >
-              {loading ? (
-                <span className="flex items-center justify-center">
-                  <div className="spinner border-white dark:border-black mr-2"></div>
-                  Creating account...
-                </span>
-              ) : (
-                'Create Account'
-              )}
-            </button>
-          </form>
-
-          {/* Login Link */}
-          <div className="mt-6 text-center">
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Already have an account?{' '}
-              <Link
-                href="/login"
-                className="text-black dark:text-white hover:underline font-bold"
-              >
-                Sign in
-              </Link>
-            </p>
+            {touched.password && errors.password && (
+              <p id="password-error" className="mt-2 text-sm text-red-500">
+                {errors.password}
+              </p>
+            )}
           </div>
-        </div>
 
-        {/* Footer */}
-        <div className="mt-8 text-center text-sm text-gray-600 dark:text-gray-400">
-          <p>© 2025 ChatBot. All rights reserved.</p>
+          {/* Confirm Password Field */}
+          <div>
+            <label
+              htmlFor="confirmPassword"
+              className="mb-2 block text-sm font-semibold text-black dark:text-white"
+            >
+              Confirm Password
+            </label>
+            <div className="relative">
+              <LockClosedIcon className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+              <input
+                id="confirmPassword"
+                type={showConfirmPassword ? 'text' : 'password'}
+                value={confirmPassword}
+                onChange={handleConfirmPasswordChange}
+                onBlur={() => handleBlur('confirmPassword')}
+                placeholder="Re-enter your password"
+                autoComplete="new-password"
+                className={[
+                  'w-full rounded-xl border-2 bg-white px-4 py-3.5 pl-11 pr-11 text-black placeholder-gray-400 transition-all focus:outline-none dark:bg-black dark:text-white dark:placeholder-gray-600',
+                  touched.confirmPassword && errors.confirmPassword
+                    ? 'border-red-500 focus:border-red-500 focus:ring-4 focus:ring-red-500/10'
+                    : 'border-gray-200 focus:border-black focus:ring-4 focus:ring-black/5 dark:border-gray-800 dark:focus:border-white dark:focus:ring-white/5',
+                ].join(' ')}
+                disabled={isLoading}
+                aria-invalid={!!(touched.confirmPassword && errors.confirmPassword)}
+                aria-describedby={
+                  touched.confirmPassword && errors.confirmPassword
+                    ? 'confirm-password-error'
+                    : undefined
+                }
+              />
+              <button
+                type="button"
+                onClick={toggleConfirmPasswordVisibility}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-900 dark:hover:text-gray-300"
+                tabIndex={-1}
+                aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
+              >
+                {showConfirmPassword ? (
+                  <EyeSlashIcon className="h-4 w-4" />
+                ) : (
+                  <EyeIcon className="h-4 w-4" />
+                )}
+              </button>
+              {isConfirmPasswordValid && (
+                <CheckCircleIcon className="pointer-events-none absolute right-11 top-1/2 h-5 w-5 -translate-y-1/2 text-green-500" />
+              )}
+            </div>
+            {touched.confirmPassword && errors.confirmPassword && (
+              <p id="confirm-password-error" className="mt-2 text-sm text-red-500">
+                {errors.confirmPassword}
+              </p>
+            )}
+          </div>
+
+          {/* Create Account Button */}
+          <button
+            type="submit"
+            disabled={isSubmitDisabled}
+            className={[
+              'group relative w-full overflow-hidden rounded-xl bg-black py-3.5 text-sm font-semibold text-white shadow-lg transition-all hover:shadow-xl dark:bg-white dark:text-black',
+              'disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none',
+              !isSubmitDisabled && 'hover:scale-[1.02]',
+            ].join(' ')}
+          >
+            {isLoading ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent dark:border-black dark:border-t-transparent" />
+                Creating Account...
+              </span>
+            ) : (
+              <span className="flex items-center justify-center gap-2">
+                Create Account
+                <ArrowRightIcon className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+              </span>
+            )}
+          </button>
+        </form>
+
+        {/* Terms */}
+        <p className="mt-6 text-center text-xs text-gray-500 dark:text-gray-600">
+          By creating an account, you agree to our{' '}
+          <Link href="#" className="text-black underline dark:text-white">
+            Terms
+          </Link>{' '}
+          and{' '}
+          <Link href="#" className="text-black underline dark:text-white">
+            Privacy Policy
+          </Link>
+        </p>
+
+        {/* Sign In Link */}
+        <div className="mt-8 rounded-xl border border-gray-200 bg-gray-50 p-6 text-center dark:border-gray-800 dark:bg-gray-900/50">
+          <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">
+            Already have an account?
+          </p>
+          <Link
+            href="/login"
+            className="inline-flex items-center gap-2 rounded-xl border-2 border-black bg-white px-6 py-2.5 text-sm font-semibold text-black transition-all hover:bg-black hover:text-white dark:border-white dark:bg-black dark:text-white dark:hover:bg-white dark:hover:text-black"
+          >
+            Sign In
+            <ArrowRightIcon className="h-4 w-4" />
+          </Link>
         </div>
       </div>
     </div>

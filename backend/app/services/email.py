@@ -8,15 +8,19 @@ from typing import Optional
 from functools import wraps
 from app.core.config import settings
 
+
 logger = logging.getLogger(__name__)
+
 
 # Template directory
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 
 
+
 class EmailServiceError(Exception):
     """Custom exception for email service errors."""
     pass
+
 
 
 def with_retry(max_attempts=3, delay=2):
@@ -42,6 +46,7 @@ def with_retry(max_attempts=3, delay=2):
     return decorator
 
 
+
 def load_template(template_name: str) -> str:
     """Load HTML template from file."""
     template_path = TEMPLATE_DIR / template_name
@@ -49,11 +54,13 @@ def load_template(template_name: str) -> str:
         return f.read()
 
 
+
 def render_template(template: str, **kwargs) -> str:
     """Simple template rendering with string replacement."""
     for key, value in kwargs.items():
         template = template.replace(f"{{{{ {key} }}}}", str(value))
     return template
+
 
 
 def _is_email_configured() -> bool:
@@ -64,6 +71,7 @@ def _is_email_configured() -> bool:
         hasattr(settings, 'EMAIL__GMAIL_APP_PASSWORD') and 
         settings.EMAIL__GMAIL_APP_PASSWORD
     )
+
 
 
 @with_retry(max_attempts=3, delay=2)
@@ -101,6 +109,9 @@ def _send_smtp_email(to_email: str, subject: str, html_content: str):
     except Exception as e:
         logger.error(f"Unexpected error sending email to {to_email}: {e}")
         raise EmailServiceError(f"Failed to send email: {str(e)}")
+
+
+
 def send_otp_verification_email(to_email: str, otp_code: str) -> bool:
     """
     Send OTP verification email with retry logic.
@@ -127,6 +138,7 @@ def send_otp_verification_email(to_email: str, otp_code: str) -> bool:
         return False
 
 
+
 def send_token_verification_email(to_email: str, verification_link: str) -> bool:
     """
     Send token-based verification email with retry logic.
@@ -151,6 +163,7 @@ def send_token_verification_email(to_email: str, verification_link: str) -> bool
     except Exception as e:
         logger.error(f"Unexpected error sending verification email to {to_email}: {e}")
         return False
+
 
 
 def send_email(to_email: str, subject: str, body: str) -> bool:

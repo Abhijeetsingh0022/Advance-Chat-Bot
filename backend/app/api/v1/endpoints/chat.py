@@ -5,12 +5,14 @@ from datetime import datetime
 from typing import Optional, List
 import re
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
-from app.schemas.validation import ChatRequest, ChatResponse, ConversationType, SessionUpdateRequest, SessionSummaryResponse, ExportRequest, ExportFormat, FileUploadValidation
+from app.schemas.validation import ChatRequest, ChatResponse, ConversationType, SessionSummaryResponse, ExportRequest, ExportFormat, FileUploadValidation
 from app.core.deps import get_current_user
 from app.services.ai_provider import generate_response
 from app.services.session_manager import get_session_manager, SessionManager
 from app.services.function_calling import FunctionCallingService, AVAILABLE_TOOLS
-from app.models.mongo_models import MessageDocument, SessionCreateRequest, BulkOperationRequest, MessageReactionRequest, MessageRatingRequest, MessageBranchRequest
+from app.services.model_router import smart_router
+from app.services.memory_service import memory_service
+from app.models.mongo_models import MessageDocument, SessionCreateRequest, SessionUpdateRequest, BulkOperationRequest, MessageReactionRequest, MessageRatingRequest, MessageBranchRequest
 from app.utils.exceptions import (
     DatabaseConnectionError, 
     DatabaseTimeoutError, 
@@ -87,20 +89,92 @@ async def chat(
             "content": req.message
         })
 
-        # Create enhanced prompt with context
+        # 🧠 MEMORY INTEGRATION: Retrieve relevant memories with context awareness
+        relevant_memories = []
+        memory_context = ""
+        try:
+            # Phase 2: Detect conversation contexts for better memory retrieval
+            conversation_contexts = await memory_service.detect_conversation_context(
+                message=req.message,
+                recent_messages=recent_messages[-5:] if len(recent_messages) >= 5 else recent_messages
+            )
+            logger.info(f"Detected conversation contexts: {conversation_contexts}")
+            
+            # Retrieve memories with context filtering
+            relevant_memories = await memory_service.get_relevant_memories(
+                user_id=user_id,
+                context=req.message,
+                limit=5,
+                min_importance=0.3,
+                conversation_contexts=conversation_contexts  # Phase 2: Context-aware retrieval
+            )
+            
+            if relevant_memories:
+                logger.info(f"Retrieved {len(relevant_memories)} relevant memories for user {user_id}")
+                memory_lines = []
+                for mem in relevant_memories:
+                    memory_lines.append(f"- {mem.content} [{mem.memory_type}]")
+                memory_context = "\n".join(memory_lines)
+                logger.info(f"Memory context: {memory_context[:200]}...")
+            else:
+                logger.info(f"No relevant memories found for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Failed to retrieve memories for user {user_id}: {e}")
+            # Continue without memories if retrieval fails
+
+        # Create enhanced prompt with context AND memories
+        prompt_parts = []
+        
+        # Add memory context first (what we know about the user)
+        if memory_context:
+            prompt_parts.append(f"What I know about you:\n{memory_context}\n")
+        
+        # Add conversation context
         if conversation_context:
             context_prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in conversation_context])
-            enhanced_prompt = f"Conversation context:\n{context_prompt}\n\nCurrent message: {req.message}"
+            prompt_parts.append(f"Conversation history:\n{context_prompt}")
+        
+        # Combine all parts
+        if prompt_parts:
+            enhanced_prompt = "\n\n".join(prompt_parts)
         else:
             enhanced_prompt = req.message
 
+        # Calculate context length for smart routing
+        context_token_estimate = sum(len(msg['content'].split()) * 1.3 for msg in conversation_context)
+        if memory_context:
+            context_token_estimate += len(memory_context.split()) * 1.3
+        
+        # Use Smart Model Router if no specific model requested
+        selected_model = req.model
+        routing_metadata = None
+        
+        if not selected_model:
+            # Smart routing enabled - analyze query and select optimal model
+            routing_decision = smart_router.select_model(
+                query=req.message,
+                request_type=conversation_type.value,
+                context_length=int(context_token_estimate),
+                optimize_for=req.optimize_for or "balanced"  # Use user preference
+            )
+            selected_model = routing_decision["model"]
+            routing_metadata = routing_decision
+            logger.info(
+                f"Smart Router selected: {selected_model} | "
+                f"Complexity: {routing_decision['complexity']} | "
+                f"Reason: {routing_decision['reason']}"
+            )
+        else:
+            logger.info(f"User specified model: {selected_model}")
+
         # Check if model supports function calling
-        # Supported: GPT-4, GPT-3.5, Claude, Gemini, Mistral, Command R, DeepSeek, Qwen
-        model_supports_functions = req.model and any(
-            model_prefix in req.model.lower() 
+        # Supported: All OpenRouter models, Gemini, Groq Llama, Qwen, DeepSeek, Grok, Nemotron, Kimi
+        model_supports_functions = selected_model and any(
+            model_prefix in selected_model.lower() 
             for model_prefix in [
-                "gpt-4", "gpt-3.5", "claude", "gemini", "mistral", 
-                "command-r", "deepseek", "qwen", "llama-3.1", "llama-3.2"
+                "gpt-oss", "gpt-4", "gpt-3.5", "claude", "gemini", "mistral", 
+                "command-r", "deepseek", "qwen", "llama-3.1", "llama-3.2", "grok",
+                "nemotron", "kimi", "moonshot", "openai", "x-ai", "xai"
             ]
         )
 
@@ -108,12 +182,12 @@ async def chat(
         tools = AVAILABLE_TOOLS if model_supports_functions else None
         
         if model_supports_functions:
-            logger.info(f"Model {req.model} supports function calling. Tools enabled: {len(AVAILABLE_TOOLS)} tools")
+            logger.info(f"Model {selected_model} supports function calling. Tools enabled: {len(AVAILABLE_TOOLS)} tools")
         else:
-            logger.info(f"Model {req.model} does not support function calling")
+            logger.info(f"Model {selected_model} does not support function calling")
         
         # Generate AI response with function calling support
-        max_iterations = 5  # Prevent infinite loops
+        max_iterations = 2  # Reduced from 5 to prevent rate limiting - max 2 tool calls
         iteration = 0
         final_response = None
         tool_results = []
@@ -125,7 +199,7 @@ async def chat(
             resp = await generate_response(
                 enhanced_prompt,
                 request_type=conversation_type.value,
-                model=req.model,
+                model=selected_model,
                 max_tokens=req.max_tokens or 1000,
                 temperature=req.temperature or 0.7,
                 tools=tools
@@ -241,11 +315,90 @@ async def chat(
             token_count=final_response.get("usage", {}).get("completion_tokens"),
             model_used=final_response.get("model"),
             provider_used=final_response.get("provider"),
-            metadata={"tool_results": tool_results} if tool_results else None
+            metadata={
+                "model": final_response.get("model"),  # Add model to metadata for frontend display
+                "tool_results": tool_results if tool_results else None,
+                "routing_metadata": routing_metadata,  # Add smart router decision
+                "used_memories": [
+                    {
+                        "id": str(mem.id),
+                        "content": mem.content,
+                        "type": mem.memory_type,
+                        "importance": mem.importance
+                    }
+                    for mem in relevant_memories
+                ] if relevant_memories else []
+            }
         )
         ai_message_id = await session_manager.add_message(ai_message)
 
         logger.info(f"Chat response generated and stored for user {user_id}")
+
+        # 🧠 AUTOMATIC MEMORY EXTRACTION: Extract with throttling to prevent duplicates
+        try:
+            import asyncio
+            from datetime import timedelta
+            
+            # Get session to check extraction status
+            session = await session_manager.get_session(user_id, session_id)
+            
+            # Calculate messages since last extraction
+            messages_since_extraction = session.message_count - session.extraction_message_count
+            
+            # Only extract if:
+            # 1. Never extracted before, OR
+            # 2. 15+ messages since last extraction, OR
+            # 3. 2+ hours since last extraction
+            should_extract = False
+            reason = None
+            if session.last_memory_extraction is None:
+                should_extract = messages_since_extraction >= 2  # First extraction after just 2 messages (lowered for testing)
+                reason = "initial extraction"
+                logger.info(f"🧠 Memory extraction check: session_id={session_id}, messages={messages_since_extraction}, threshold=2, should_extract={should_extract}")
+            elif messages_since_extraction >= 15:
+                should_extract = True
+                reason = f"{messages_since_extraction} new messages"
+            elif (datetime.utcnow() - session.last_memory_extraction) > timedelta(hours=2):
+                should_extract = messages_since_extraction >= 3  # At least 3 new messages
+                reason = "2+ hours elapsed"
+            
+            if should_extract:
+                asyncio.create_task(
+                    memory_service.extract_memories_from_conversation(
+                        user_id=user_id,
+                        session_id=session_id,
+                        message_limit=20
+                    )
+                )
+                # Update extraction tracking
+                from app.db.mongodb import mongodb_manager
+                sessions_collection = mongodb_manager.get_collection("sessions")
+                from bson import ObjectId
+                await sessions_collection.update_one(
+                    {"session_id": session_id, "user_id": user_id},
+                    {
+                        "$set": {
+                            "last_memory_extraction": datetime.utcnow(),
+                            "extraction_message_count": session.message_count
+                        }
+                    }
+                )
+                logger.info(f"🧠 Triggered memory extraction for session {session_id} ({reason})")
+            else:
+                logger.debug(f"🧠 Skipped memory extraction (throttled): {messages_since_extraction} messages since last")
+        except Exception as e:
+            logger.warning(f"Memory extraction trigger failed (non-critical): {e}")
+
+        # Format used_memories for response
+        used_memories_response = [
+            {
+                "id": str(mem.id),
+                "content": mem.content,
+                "type": mem.memory_type,
+                "importance": mem.importance
+            }
+            for mem in relevant_memories
+        ] if relevant_memories else None
 
         return ChatResponse(
             message_id=ai_message_id,
@@ -255,7 +408,8 @@ async def chat(
             provider=final_response.get("provider"),
             request_type=final_response.get("request_type"),
             usage=final_response.get("usage"),
-            conversation_type=conversation_type
+            conversation_type=conversation_type,
+            used_memories=used_memories_response
         )
 
     except HTTPException:
@@ -449,11 +603,66 @@ async def chat_with_files(
             content=resp["reply"],
             token_count=resp.get("usage", {}).get("completion_tokens"),
             model_used=resp.get("model"),
-            provider_used=resp.get("provider")
+            provider_used=resp.get("provider"),
+            metadata={
+                "model": resp.get("model")  # Add model to metadata for frontend display
+            }
         )
         ai_message_id = await session_manager.add_message(ai_message)
 
         logger.info(f"Chat response with files generated and stored for user {user_id}")
+
+        # 🧠 AUTOMATIC MEMORY EXTRACTION: Extract with throttling
+        try:
+            import asyncio
+            from datetime import timedelta
+            
+            session = await session_manager.get_session(user_id, session_id)
+            
+            # Ensure extraction fields are initialized
+            if not hasattr(session, 'extraction_message_count') or session.extraction_message_count is None:
+                session.extraction_message_count = 0
+            
+            messages_since_extraction = session.message_count - session.extraction_message_count
+            
+            should_extract = False
+            reason = None
+            if session.last_memory_extraction is None:
+                should_extract = messages_since_extraction >= 2  # Lowered for testing
+                reason = "initial extraction"
+                logger.info(f"🧠 Memory extraction check (with-files): {messages_since_extraction} messages, threshold: 2, should_extract: {should_extract}")
+            elif messages_since_extraction >= 15:
+                should_extract = True
+                reason = f"{messages_since_extraction} new messages"
+            elif (datetime.utcnow() - session.last_memory_extraction) > timedelta(hours=2):
+                should_extract = messages_since_extraction >= 3
+                reason = "2+ hours elapsed"
+            
+            if should_extract:
+                asyncio.create_task(
+                    memory_service.extract_memories_from_conversation(
+                        user_id=user_id,
+                        session_id=session_id,
+                        message_limit=20
+                    )
+                )
+                from app.db.mongodb import mongodb_manager
+                sessions_collection = mongodb_manager.get_collection("sessions")
+                from bson import ObjectId
+                await sessions_collection.update_one(
+                    {"session_id": session_id, "user_id": user_id},
+                    {
+                        "$set": {
+                            "last_memory_extraction": datetime.utcnow(),
+                            "extraction_message_count": session.message_count
+                        }
+                    }
+                )
+                logger.info(f"🧠 Triggered memory extraction for file session {session_id} ({reason})")
+            else:
+                logger.debug(f"🧠 Skipped memory extraction (throttled): {messages_since_extraction} messages")
+        except Exception as e:
+            logger.warning(f"Memory extraction trigger failed (non-critical): {e}")
 
         return ChatResponse(
             message_id=ai_message_id,
@@ -463,7 +672,8 @@ async def chat_with_files(
             provider=resp.get("provider"),
             request_type=resp.get("request_type"),
             usage=resp.get("usage"),
-            conversation_type=ConversationType(conversation_type)
+            conversation_type=ConversationType(conversation_type),
+            used_memories=None  # TODO: Add memory retrieval to /with-files endpoint
         )
 
     except HTTPException:
@@ -889,17 +1099,22 @@ async def chat_stream(
     user_id: str = Depends(get_current_user),
     session_manager: SessionManager = Depends(get_session_manager)
 ):
-    """Stream AI responses in real-time using Server-Sent Events (SSE)."""
+    """
+    Stream AI responses in real-time using Server-Sent Events (SSE).
+    NOW WITH TRUE TOKEN-BY-TOKEN STREAMING!
+    """
     from fastapi.responses import StreamingResponse
+    from app.services.ai_provider_streaming import create_streaming_provider
+    from app.services.function_calling import FunctionCallingService
     import json
     import asyncio
     
     async def generate_stream():
         try:
-            logger.info(f"Streaming chat request from user {user_id}: {req.message[:50]}...")
+            logger.info(f"TRUE STREAMING: Chat request from user {user_id}: {req.message[:50]}...")
 
             if not req.message:
-                yield f"data: {json.dumps({'error': 'Message is required'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'error': 'Message is required'})}\n\n"
                 return
 
             # Get or create session
@@ -920,19 +1135,84 @@ async def chat_stream(
             # Send session_id first
             yield f"data: {json.dumps({'type': 'session_id', 'session_id': session_id})}\n\n"
 
-            # Get conversation context
+            # Get conversation context (moved before memory retrieval)
             recent_messages = await session_manager.get_recent_messages(user_id, session_id, limit=10)
             conversation_context = [{"role": msg.role, "content": msg.content} for msg in recent_messages]
             conversation_context.append({"role": "user", "content": req.message})
 
-            # Generate AI response (simulate streaming by chunking)
-            resp = await generate_response(
-                req.message,
-                request_type=conversation_type.value,
-                model=req.model,
-                max_tokens=req.max_tokens or 1000,
-                temperature=req.temperature or 0.7
+            # Retrieve relevant memories
+            relevant_memories = await memory_service.get_relevant_memories(
+                user_id=user_id,
+                context=req.message,
+                limit=5,
+                min_importance=0.3
             )
+            
+            # Send memory info to client
+            if relevant_memories:
+                memory_info = {
+                    "type": "memories",
+                    "count": len(relevant_memories),
+                    "memories": [
+                        {
+                            "content": mem.content,
+                            "type": mem.memory_type,
+                            "importance": mem.importance
+                        }
+                        for mem in relevant_memories
+                    ]
+                }
+                yield f"data: {json.dumps(memory_info)}\n\n"
+            
+            # Format memories as context
+            memory_context = ""
+            if relevant_memories:
+                memory_lines = [f"- {mem.content} [{mem.memory_type}]" for mem in relevant_memories]
+                memory_context = "\n".join(memory_lines)
+
+            # Build enhanced prompt with memories and context
+            prompt_parts = []
+            
+            if memory_context:
+                prompt_parts.append(f"What I know about you:\n{memory_context}\n")
+            
+            if len(conversation_context) > 1:
+                context_prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in conversation_context[:-1]])
+                prompt_parts.append(f"Conversation history:\n{context_prompt}")
+            
+            prompt_parts.append(f"Current message: {req.message}")
+            enhanced_prompt = "\n\n".join(prompt_parts)
+
+            # Calculate context length for smart routing (including memories)
+            context_token_estimate = sum(len(msg['content'].split()) * 1.3 for msg in conversation_context)
+            if memory_context:
+                context_token_estimate += len(memory_context.split()) * 1.3
+            
+            # Use Smart Model Router if no specific model requested
+            selected_model = req.model
+            routing_metadata = None
+            
+            if not selected_model:
+                # Smart routing enabled
+                routing_decision = smart_router.select_model(
+                    query=req.message,
+                    request_type=conversation_type.value,
+                    context_length=int(context_token_estimate),
+                    optimize_for=req.optimize_for or "balanced"
+                )
+                selected_model = routing_decision["model"]
+                routing_metadata = routing_decision
+                
+                # Send routing info to client
+                yield f"data: {json.dumps({'type': 'routing', 'routing': routing_metadata})}\n\n"
+                
+                logger.info(
+                    f"Smart Router selected: {selected_model} | "
+                    f"Complexity: {routing_decision['complexity']} | "
+                    f"Reason: {routing_decision['reason']}"
+                )
+            else:
+                logger.info(f"User specified model: {selected_model}")
 
             # Store user message
             user_message = MessageDocument(
@@ -940,53 +1220,383 @@ async def chat_stream(
                 session_id=session_id,
                 role="user",
                 content=req.message,
-                token_count=resp.get("usage", {}).get("prompt_tokens"),
-                model_used=resp.get("model"),
-                provider_used=resp.get("provider")
+                token_count=None,  # Will update later
+                model_used=selected_model,
+                provider_used=None
             )
             user_message_id = await session_manager.add_message(user_message)
 
-            # Stream the response in chunks (word by word simulation)
-            full_response = resp["reply"]
-            words = full_response.split()
-            accumulated_text = ""
-            
-            for i, word in enumerate(words):
-                accumulated_text += word + " "
-                chunk_data = {
-                    "type": "chunk",
-                    "content": word + " ",
-                    "accumulated": accumulated_text.strip(),
-                    "index": i
-                }
-                yield f"data: {json.dumps(chunk_data)}\n\n"
-                await asyncio.sleep(0.05)  # Small delay for streaming effect
+            # Check if model supports function calling
+            model_supports_functions = selected_model and any(
+                model_prefix in selected_model.lower() 
+                for model_prefix in [
+                    "gpt-oss", "gpt-4", "gpt-3.5", "claude", "gemini", "mistral", 
+                    "command-r", "deepseek", "qwen", "llama-3.1", "llama-3.2", "grok",
+                    "nemotron", "kimi", "moonshot", "openai", "x-ai", "xai"
+                ]
+            )
 
-            # Store AI response
+            # Enable tools for supported models
+            tools = AVAILABLE_TOOLS if model_supports_functions else None
+            
+            if model_supports_functions:
+                logger.info(f"Model {selected_model} supports function calling. Tools enabled: {len(AVAILABLE_TOOLS)} tools")
+                # Send tools info to client
+                yield f"data: {json.dumps({'type': 'tools_enabled', 'tools_count': len(AVAILABLE_TOOLS)})}\n\n"
+
+            # CRITICAL: Groq and Gemini don't support function calling in streaming mode
+            # If these models are selected AND tools are needed, fallback to non-streaming endpoint
+            is_groq_model = selected_model and any(
+                groq_prefix in selected_model.lower() 
+                for groq_prefix in ["llama-3.1", "llama-3.2", "mixtral-8x7b", "gemma", "llama3-groq"]
+            )
+            
+            is_gemini_model = selected_model and "gemini" in selected_model.lower()
+            
+            # Fallback to non-streaming if tools are needed with incompatible providers
+            if (is_groq_model or is_gemini_model) and tools:
+                provider_name_log = "Groq" if is_groq_model else "Gemini"
+                logger.warning(f"{provider_name_log} model {selected_model} with function calling detected - {provider_name_log} doesn't support tools in streaming mode")
+                logger.info(f"Falling back to non-streaming mode for {provider_name_log} with function calling")
+                
+                # Use the non-streaming endpoint logic
+                from app.services.ai_provider import generate_response
+                
+                # Notify client about non-streaming mode
+                yield f"data: {json.dumps({'type': 'info', 'message': 'Using non-streaming mode for function calling'})}\n\n"
+                
+                # Generate response using non-streaming provider (with function calling support)
+                max_iterations = 2
+                iteration = 0
+                final_response_text = ""
+                
+                while iteration < max_iterations:
+                    iteration += 1
+                    
+                    resp = await generate_response(
+                        enhanced_prompt,
+                        request_type=conversation_type.value,
+                        model=selected_model,
+                        max_tokens=req.max_tokens or 1000,
+                        temperature=req.temperature or 0.7,
+                        tools=tools
+                    )
+                    
+                    # Check if AI wants to call a function
+                    tool_calls = resp.get("tool_calls")
+                    
+                    if tool_calls:
+                        logger.info(f"AI requested {len(tool_calls)} tool calls: {[tc.get('function', {}).get('name') for tc in tool_calls]}")
+                        
+                        # Execute all requested function calls
+                        for tool_call in tool_calls:
+                            function_name = tool_call.get("function", {}).get("name")
+                            function_args_raw = tool_call.get("function", {}).get("arguments", "{}")
+                            
+                            # Parse arguments
+                            try:
+                                if isinstance(function_args_raw, dict):
+                                    function_args = function_args_raw
+                                elif isinstance(function_args_raw, str):
+                                    function_args = json.loads(function_args_raw)
+                                else:
+                                    function_args = {}
+                            except json.JSONDecodeError:
+                                function_args = {}
+                            
+                            # Execute the function
+                            result = await function_calling_service.execute_function(
+                                function_name, 
+                                function_args
+                            )
+                            
+                            # Notify client about tool call
+                            yield f"data: {json.dumps({'type': 'tool_call', 'function': function_name, 'result': result})}\n\n"
+                            
+                            # Add function result to prompt for next iteration
+                            enhanced_prompt += f"\n\nFunction {function_name} returned: {result}\n\nPlease provide a natural response based on this information."
+                    
+                    else:
+                        # No function calls, we have the final response
+                        final_response_text = resp.get("reply", "")
+                        usage_data = resp.get("usage")
+                        provider_name = resp.get("provider")
+                        break
+                
+                # Stream the final response word-by-word for better UX
+                words = final_response_text.split()
+                accumulated = ""
+                for i, word in enumerate(words):
+                    accumulated += word + (" " if i < len(words) - 1 else "")
+                    yield f"data: {json.dumps({'type': 'chunk', 'content': word + ' ', 'accumulated': accumulated})}\n\n"
+                    await asyncio.sleep(0.05)  # Small delay for visual effect
+                
+                # Mark as complete
+                yield f"data: {json.dumps({'type': 'done', 'accumulated': final_response_text, 'usage': usage_data, 'provider': provider_name})}\n\n"
+                
+                # Save message to database
+                await session_manager.add_message(
+                    user_id=user_id,
+                    session_id=session_id,
+                    role="user",
+                    content=req.message
+                )
+                
+                await session_manager.add_message(
+                    user_id=user_id,
+                    session_id=session_id,
+                    role="assistant",
+                    content=final_response_text,
+                    model=selected_model,
+                    tokens_used=usage_data.get("total_tokens", 0) if usage_data else 0
+                )
+                
+                # Extract and save memories
+                await memory_service.extract_and_save_memories(
+                    user_id=user_id,
+                    user_message=req.message,
+                    assistant_message=final_response_text,
+                    session_id=session_id
+                )
+                
+                yield "data: [DONE]\n\n"
+                return
+
+            # Create streaming provider with automatic fallback
+            try:
+                streaming_provider = await create_streaming_provider(selected_model)
+            except Exception as e:
+                logger.error(f"Failed to create streaming provider for {selected_model}: {e}")
+                # Fallback to Groq if OpenRouter fails
+                logger.info("Falling back to Groq llama-3.1-8b-instant")
+                selected_model = "llama-3.1-8b-instant"
+                streaming_provider = await create_streaming_provider(selected_model)
+                yield f"data: {json.dumps({'type': 'fallback', 'message': 'Primary model unavailable, using fast fallback model', 'model': selected_model})}\n\n"
+            
+            # Generate TRUE token-by-token streaming response
+            accumulated_text = ""
+            tool_calls_received = []
+            usage_data = None
+            provider_name = None
+            
+            try:
+                async for chunk in streaming_provider.generate_stream(
+                    prompt=enhanced_prompt,
+                    tools=tools,
+                    max_tokens=req.max_tokens or 1000,
+                    temperature=req.temperature or 0.7
+                ):
+                    chunk_type = chunk.get("type")
+                    
+                    if chunk_type == "content":
+                        # Stream text content token-by-token
+                        content = chunk.get("content", "")
+                        accumulated_text = chunk.get("accumulated", "")
+                        
+                        yield f"data: {json.dumps({'type': 'chunk', 'content': content, 'accumulated': accumulated_text})}\n\n"
+                    
+                    elif chunk_type == "tool_call":
+                        # Tool call detected during streaming
+                        tool_call = chunk.get("tool_call")
+                        tool_calls_received.append(tool_call)
+                        
+                        yield f"data: {json.dumps({'type': 'tool_call', 'tool_call': tool_call})}\n\n"
+                    
+                    elif chunk_type == "done":
+                        # Streaming complete
+                        accumulated_text = chunk.get("accumulated", accumulated_text)
+                        tool_calls_received = chunk.get("tool_calls") or tool_calls_received
+                        usage_data = chunk.get("usage")
+                        provider_name = chunk.get("provider")
+                        
+                        logger.info(f"Streaming completed: {len(accumulated_text)} chars, {len(tool_calls_received) if tool_calls_received else 0} tool calls")
+                    
+                    elif chunk_type == "error":
+                        # Error during streaming
+                        error_msg = chunk.get("error", "Unknown streaming error")
+                        logger.error(f"Streaming error: {error_msg}")
+                        yield f"data: {json.dumps({'type': 'error', 'error': error_msg})}\n\n"
+                        return
+            
+            except httpx.HTTPStatusError as http_err:
+                # Catch 502 and other HTTP errors, try fallback
+                if "502" in str(http_err) or "Bad Gateway" in str(http_err):
+                    logger.error(f"OpenRouter service unavailable (502), falling back to Groq")
+                    yield f"data: {json.dumps({'type': 'fallback', 'message': 'Service temporarily unavailable, switching to backup...', 'model': 'llama-3.1-8b-instant'})}\n\n"
+                    
+                    # Fallback to Groq
+                    selected_model = "llama-3.1-8b-instant"
+                    streaming_provider = await create_streaming_provider(selected_model)
+                    
+                    # Retry with Groq
+                    async for chunk in streaming_provider.generate_stream(
+                        prompt=enhanced_prompt,
+                        tools=tools,
+                        max_tokens=req.max_tokens or 1000,
+                        temperature=req.temperature or 0.7
+                    ):
+                        chunk_type = chunk.get("type")
+                        
+                        if chunk_type == "content":
+                            content = chunk.get("content", "")
+                            accumulated_text = chunk.get("accumulated", "")
+                            yield f"data: {json.dumps({'type': 'chunk', 'content': content, 'accumulated': accumulated_text})}\n\n"
+                        
+                        elif chunk_type == "done":
+                            accumulated_text = chunk.get("accumulated", accumulated_text)
+                            tool_calls_received = chunk.get("tool_calls") or tool_calls_received
+                            usage_data = chunk.get("usage")
+                            provider_name = chunk.get("provider")
+                            logger.info(f"Fallback streaming completed: {len(accumulated_text)} chars")
+                        
+                        elif chunk_type == "error":
+                            error_msg = chunk.get("error", "Unknown streaming error")
+                            logger.error(f"Fallback streaming error: {error_msg}")
+                            yield f"data: {json.dumps({'type': 'error', 'error': error_msg})}\n\n"
+                            return
+                else:
+                    # Other HTTP errors
+                    logger.error(f"HTTP error during streaming: {http_err}")
+                    yield f"data: {json.dumps({'type': 'error', 'error': str(http_err)})}\n\n"
+                    return
+            
+            except Exception as e:
+                logger.error(f"Unexpected streaming error: {e}")
+                yield f"data: {json.dumps({'type': 'error', 'error': f'An unexpected error occurred: {str(e)}'})}\n\n"
+                return
+
+            # Handle function calling if tool calls were made
+            final_response = accumulated_text
+            tool_results = []
+            
+            if tool_calls_received and model_supports_functions:
+                function_service = FunctionCallingService()
+                logger.info(f"Processing {len(tool_calls_received)} function calls...")
+                
+                for tool_call in tool_calls_received:
+                    try:
+                        func_name = tool_call.get("function", {}).get("name", "")
+                        func_args = tool_call.get("function", {}).get("arguments", {})
+                        
+                        # Execute function
+                        result = await function_service.execute_function(func_name, func_args)
+                        tool_results.append({
+                            "name": func_name,
+                            "result": result
+                        })
+                        
+                        # Send tool result to client
+                        yield f"data: {json.dumps({'type': 'tool_result', 'name': func_name, 'result': result})}\n\n"
+                        
+                    except Exception as e:
+                        logger.error(f"Function call error: {e}")
+                        yield f"data: {json.dumps({'type': 'tool_error', 'error': str(e)})}\n\n"
+                
+                # If we got tool results, append them to the response
+                if tool_results:
+                    tool_summary = "\n\n" + "\n".join([f"[{tr['name']}]: {tr['result']}" for tr in tool_results])
+                    final_response = accumulated_text + tool_summary
+
+            # Store AI response with all metadata
             ai_message = MessageDocument(
                 user_id=user_id,
                 session_id=session_id,
                 role="assistant",
-                content=full_response,
-                token_count=resp.get("usage", {}).get("completion_tokens"),
-                model_used=resp.get("model"),
-                provider_used=resp.get("provider")
+                content=final_response,
+                token_count=usage_data.get("completion_tokens") if usage_data else None,
+                model_used=selected_model,
+                provider_used=provider_name,
+                metadata={
+                    "model": selected_model,  # Add model to metadata for frontend display
+                    "tool_results": tool_results if tool_results else None,
+                    "routing_metadata": routing_metadata,
+                    "streaming": True,
+                    "used_memories": [
+                        {
+                            "id": str(mem.id),
+                            "content": mem.content,
+                            "type": mem.memory_type,
+                            "importance": mem.importance
+                        }
+                        for mem in relevant_memories
+                    ] if relevant_memories else []
+                }
             )
             ai_message_id = await session_manager.add_message(ai_message)
+
+            # 🧠 AUTOMATIC MEMORY EXTRACTION: Extract with throttling
+            try:
+                import asyncio
+                from datetime import timedelta
+                
+                session = await session_manager.get_session(user_id, session_id)
+                
+                # Ensure extraction fields are initialized
+                if not hasattr(session, 'extraction_message_count') or session.extraction_message_count is None:
+                    session.extraction_message_count = 0
+                
+                messages_since_extraction = session.message_count - session.extraction_message_count
+                
+                should_extract = False
+                reason = None
+                if session.last_memory_extraction is None:
+                    should_extract = messages_since_extraction >= 2  # Lowered for testing
+                    reason = "initial extraction"
+                    logger.info(f"🧠 Memory extraction check (SSE): {messages_since_extraction} messages, threshold: 2, should_extract: {should_extract}")
+                elif messages_since_extraction >= 15:
+                    should_extract = True
+                    reason = f"{messages_since_extraction} new messages"
+                elif (datetime.utcnow() - session.last_memory_extraction) > timedelta(hours=2):
+                    should_extract = messages_since_extraction >= 3
+                    reason = "2+ hours elapsed"
+                
+                if should_extract:
+                    asyncio.create_task(
+                        memory_service.extract_memories_from_conversation(
+                            user_id=user_id,
+                            session_id=session_id,
+                            message_limit=20
+                        )
+                    )
+                    from app.db.mongodb import mongodb_manager
+                    sessions_collection = mongodb_manager.get_collection("sessions")
+                    from bson import ObjectId
+                    await sessions_collection.update_one(
+                        {"session_id": session_id, "user_id": user_id},
+                        {
+                            "$set": {
+                                "last_memory_extraction": datetime.utcnow(),
+                                "extraction_message_count": session.message_count
+                            }
+                        }
+                    )
+                    logger.info(f"🧠 Triggered memory extraction for streaming session {session_id} ({reason})")
+                else:
+                    logger.debug(f"🧠 Skipped memory extraction (throttled): {messages_since_extraction} messages")
+            except Exception as e:
+                logger.warning(f"Memory extraction trigger failed (non-critical): {e}")
+
+            # Update user message with actual token count
+            if usage_data:
+                await session_manager.update_message_tokens(user_message_id, usage_data.get("prompt_tokens"))
 
             # Send completion event
             completion_data = {
                 "type": "complete",
                 "message_id": ai_message_id,
                 "session_id": session_id,
-                "model": resp.get("model"),
-                "provider": resp.get("provider"),
-                "usage": resp.get("usage")
+                "model": selected_model,
+                "provider": provider_name,
+                "usage": usage_data,
+                "routing": routing_metadata,
+                "tool_calls": len(tool_calls_received) if tool_calls_received else 0
             }
             yield f"data: {json.dumps(completion_data)}\n\n"
 
         except Exception as e:
             logger.error(f"Streaming error for user {user_id}: {e}")
+            import traceback
+            traceback.print_exc()
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
 
     return StreamingResponse(
@@ -1336,3 +1946,154 @@ async def activate_branch(
     except Exception as e:
         logger.error(f"Error activating branch {branch_id} for session {session_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to activate branch")
+
+
+@router.get("/routing-stats")
+async def get_routing_stats(
+    user_id: str = Depends(get_current_user)
+):
+    """
+    Get Smart Model Router statistics.
+    
+    Returns routing decisions, cost savings, and model usage patterns.
+    """
+    try:
+        stats = smart_router.get_routing_stats()
+        logger.info(f"Retrieved routing stats for user {user_id}")
+        return {
+            "success": True,
+            "stats": stats,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving routing stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve routing statistics")
+
+
+@router.get("/models")
+async def get_available_models(
+    user_id: str = Depends(get_current_user)
+):
+    """
+    Get list of available AI models with their capabilities.
+    
+    Returns model information including ID, name, provider, and features.
+    """
+    try:
+        models = [
+            # General Purpose Models
+            {
+                "id": "openai/gpt-oss-20b:free",
+                "name": "GPT-OSS 20B (Free)",
+                "provider": "OpenRouter",
+                "type": "general",
+                "supports_streaming": True,
+                "supports_function_calling": True,
+                "context_window": 8192,
+                "cost_per_1k_tokens": 0.0
+            },
+            {
+                "id": "llama-3.1-8b-instant",
+                "name": "Llama 3.1 8B Instant",
+                "provider": "Groq",
+                "type": "general",
+                "supports_streaming": True,
+                "supports_function_calling": True,
+                "context_window": 8192,
+                "cost_per_1k_tokens": 0.0
+            },
+            # Coding Models
+            {
+                "id": "qwen/qwen3-coder:free",
+                "name": "Qwen3 Coder",
+                "provider": "OpenRouter",
+                "type": "coding",
+                "supports_streaming": True,
+                "supports_function_calling": True,
+                "context_window": 32768,
+                "cost_per_1k_tokens": 0.0
+            },
+            {
+                "id": "x-ai/grok-2:free",
+                "name": "Grok 2",
+                "provider": "OpenRouter",
+                "type": "coding",
+                "supports_streaming": True,
+                "supports_function_calling": True,
+                "context_window": 32768,
+                "cost_per_1k_tokens": 0.0
+            },
+            # Reasoning Models
+            {
+                "id": "moonshotai/kimi-k2:free",
+                "name": "Kimi K2",
+                "provider": "OpenRouter",
+                "type": "reasoning",
+                "supports_streaming": True,
+                "supports_function_calling": True,
+                "context_window": 128000,
+                "cost_per_1k_tokens": 0.0
+            },
+            {
+                "id": "deepseek/deepseek-r1:free",
+                "name": "DeepSeek R1",
+                "provider": "OpenRouter",
+                "type": "reasoning",
+                "supports_streaming": True,
+                "supports_function_calling": True,
+                "context_window": 64000,
+                "cost_per_1k_tokens": 0.0
+            },
+            # Vision/Image Models
+            {
+                "id": "google/gemma-3-27b-it:free",
+                "name": "Gemma 3 27B",
+                "provider": "OpenRouter",
+                "type": "image",
+                "supports_streaming": True,
+                "supports_function_calling": True,
+                "context_window": 8192,
+                "cost_per_1k_tokens": 0.0
+            },
+            {
+                "id": "qwen/qwen2.5-vl-32b-instruct:free",
+                "name": "Qwen2.5 VL 32B",
+                "provider": "OpenRouter",
+                "type": "image",
+                "supports_streaming": True,
+                "supports_function_calling": True,
+                "context_window": 32768,
+                "cost_per_1k_tokens": 0.0
+            },
+            {
+                "id": "nvidia/nemotron-nano-12b-v2-vl:free",
+                "name": "Nemotron Nano 12B V2 VL",
+                "provider": "OpenRouter",
+                "type": "image",
+                "supports_streaming": True,
+                "supports_function_calling": True,
+                "context_window": 8192,
+                "cost_per_1k_tokens": 0.0
+            },
+            # Text Processing Models
+            {
+                "id": "gemini-2.5-flash",
+                "name": "Gemini 2.5 Flash",
+                "provider": "Google",
+                "type": "text",
+                "supports_streaming": True,
+                "supports_function_calling": True,
+                "context_window": 1000000,
+                "cost_per_1k_tokens": 0.0
+            },
+        ]
+        
+        logger.info(f"Retrieved {len(models)} available models for user {user_id}")
+        return {
+            "success": True,
+            "models": models,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving available models: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve available models")

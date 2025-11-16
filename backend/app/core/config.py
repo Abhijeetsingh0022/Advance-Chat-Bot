@@ -10,6 +10,9 @@ try:
         DATABASE_URL: str = "sqlite:///./chatbot.db"
         MONGO_URI: Optional[str] = None  # Optional - MongoDB for chat history
         
+        # Debug/Development
+        DEBUG: bool = False
+        
         # Security
         SECRET_KEY: str  # No default - must be set in environment
         ALGORITHM: str = "HS256"
@@ -25,12 +28,18 @@ try:
         AI_SERVICES__OPEN_ROUTER_API_KEY_GPT_OSS: str = ""
         AI_SERVICES__OPEN_ROUTER_API_KEY_QWEN_CODER: str = ""
         AI_SERVICES__OPEN_ROUTER_API_KEY_GEMMA: str = ""
+        AI_SERVICES__OPEN_ROUTER_API_KEY_MOONSHOT: str = ""
+        AI_SERVICES__OPEN_ROUTER_API_KEY_QWEN_VL: str = ""
+        AI_SERVICES__OPEN_ROUTER_API_KEY_NEMOTRON: str = ""
         AI_SERVICES__GROQ_API_KEY: str = ""
         AI_SERVICES__OPEN_ROUTER_API_KEY_1: str = ""
         AI_SERVICES__OPEN_ROUTER_API_KEY_2: str = ""
         AI_SERVICES__GEMINI_API_KEY: str = ""
         
-        # OpenWeatherMap API Key
+        # Weather API
+        WEATHER_API_KEY: str = ""
+        
+        # OpenWeatherMap API Key (legacy support)
         OPENWEATHERMAP_API_KEY: str = ""
 
         # Rate Limiting
@@ -81,6 +90,7 @@ except Exception as e:
     class Settings:
         DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./chatbot.db")
         MONGO_URI: str = os.getenv("MONGO_URI") # Optional
+        DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
         SECRET_KEY: str = os.getenv("SECRET_KEY")  # No default - must be set
         ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
         ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
@@ -93,12 +103,18 @@ except Exception as e:
         AI_SERVICES__OPEN_ROUTER_API_KEY_GPT_OSS: str = os.getenv("AI_SERVICES__OPEN_ROUTER_API_KEY_GPT_OSS", "")
         AI_SERVICES__OPEN_ROUTER_API_KEY_QWEN_CODER: str = os.getenv("AI_SERVICES__OPEN_ROUTER_API_KEY_QWEN_CODER", "")
         AI_SERVICES__OPEN_ROUTER_API_KEY_GEMMA: str = os.getenv("AI_SERVICES__OPEN_ROUTER_API_KEY_GEMMA", "")
+        AI_SERVICES__OPEN_ROUTER_API_KEY_MOONSHOT: str = os.getenv("AI_SERVICES__OPEN_ROUTER_API_KEY_MOONSHOT", "")
+        AI_SERVICES__OPEN_ROUTER_API_KEY_QWEN_VL: str = os.getenv("AI_SERVICES__OPEN_ROUTER_API_KEY_QWEN_VL", "")
+        AI_SERVICES__OPEN_ROUTER_API_KEY_NEMOTRON: str = os.getenv("AI_SERVICES__OPEN_ROUTER_API_KEY_NEMOTRON", "")
         AI_SERVICES__GROQ_API_KEY: str = os.getenv("AI_SERVICES__GROQ_API_KEY", "")
         AI_SERVICES__OPEN_ROUTER_API_KEY_1: str = os.getenv("AI_SERVICES__OPEN_ROUTER_API_KEY_1", "")
         AI_SERVICES__OPEN_ROUTER_API_KEY_2: str = os.getenv("AI_SERVICES__OPEN_ROUTER_API_KEY_2", "")
         AI_SERVICES__GEMINI_API_KEY: str = os.getenv("AI_SERVICES__GEMINI_API_KEY", "")
         
-        # OpenWeatherMap API Key
+        # Weather API
+        WEATHER_API_KEY: str = os.getenv("WEATHER_API_KEY", "")
+        
+        # OpenWeatherMap API Key (legacy support)
         OPENWEATHERMAP_API_KEY: str = os.getenv("OPENWEATHERMAP_API_KEY", "")
 
         # Rate Limiting

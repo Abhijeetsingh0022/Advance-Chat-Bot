@@ -10,6 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from fastapi.openapi.utils import get_openapi
+from dotenv import load_dotenv
+
+# Load environment variables first
+load_dotenv()
 
 from app.core.config import settings
 from app.db.mongodb import init_mongodb, close_mongodb
@@ -71,6 +75,16 @@ async def lifespan(app: FastAPI):
             logger.error("MongoDB not configured - MONGO_URI is required")
             raise RuntimeError("MongoDB URI must be configured")
         
+        # Start background scheduler for memory maintenance
+        try:
+            from app.utils.scheduler import background_scheduler
+            background_scheduler.start()
+            background_scheduler.schedule_memory_maintenance()
+            logger.info("Background scheduler started with memory maintenance tasks")
+        except Exception as scheduler_error:
+            logger.warning(f"Failed to start background scheduler: {scheduler_error}")
+            # Non-critical, continue without scheduler
+        
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         raise
@@ -79,6 +93,15 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down application...")
+    
+    # Shutdown scheduler
+    try:
+        from app.utils.scheduler import background_scheduler
+        background_scheduler.shutdown()
+        logger.info("Background scheduler stopped")
+    except Exception:
+        pass
+    
     await close_mongodb()
     logger.info("Application shutdown complete.")
 
@@ -93,12 +116,13 @@ def create_app() -> FastAPI:
         lifespan=lifespan
     )
 
-    # Configure CORS
+    # Configure CORS with dynamic localhost port support
     allowed_origins = [origin.strip() for origin in settings.FRONTEND_ORIGINS.split(',') if origin.strip()]
     
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1):\d+",  # Allow any localhost port
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -157,6 +181,34 @@ def create_app() -> FastAPI:
             f"ChatBot exception: {exc.detail} (code: {exc.error_code})",
             extra={'request_id': request_id}
         )
+        # If this is a validation error raised by our custom ValidationError
+        # return the structured ValidationErrorResponse so frontend can show field-level errors.
+        try:
+            if getattr(exc, 'error_code', None) == 'VALIDATION_ERROR':
+                # The custom ValidationError often contains a semicolon-separated
+                # list of issue messages (e.g. "Password must contain...; Password must ...").
+                detail_text = str(exc.detail or '')
+                parts = [p.strip() for p in detail_text.split(';') if p.strip()]
+                errors = []
+                for p in parts:
+                    # Try to infer field name when possible
+                    field = 'password' if 'password' in p.lower() else ''
+                    errors.append(ValidationErrorDetail(field=field, message=p))
+
+                return JSONResponse(
+                    status_code=exc.status_code,
+                    content=ValidationErrorResponse(
+                        error='validation_error',
+                        message='Input validation failed',
+                        error_code='VALIDATION_ERROR',
+                        errors=errors
+                    ).dict(),
+                    headers=exc.headers
+                )
+        except Exception:
+            # Fall through to the generic error formatting if anything goes wrong
+            logger.exception('Failed to format validation error')
+
         return JSONResponse(
             status_code=exc.status_code,
             content=ErrorResponse(

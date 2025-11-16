@@ -1,59 +1,472 @@
 # ==================================
-# Root Level .gitignore
+# Advanced AI ChatBot - Comprehensive .gitignore
 # ==================================
 
-# Databases
+# ============ Environment & Secrets ============
+# CRITICAL: Never commit secrets
+.env
+.env.*
+.env.local
+.env.development
+.env.production
+.env.test
+.env.staging
+!.env.example
+*.pem
+*.key
+*.crt
+*.cer
+secrets.json
+credentials.json
+
+# ============ Databases ============
+# SQL Databases
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
 chatbot.db
+chatbot.db-*
 
-# Environment Files
-.env
-.env.local
-.env.*.local
+# Database dumps
+*.sql
+*.dump
+backup_*.sql
 
-# OS Files
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-*~
+# MongoDB
+mongodb_data/
+mongo-data/
 
-# Logs
-*.log
-logs/
-app.log
-
-# IDE
-.vscode/
-.idea/
-*.sublime-*
-
-# Python
+# ============ Python / Backend ============
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+
+# Virtual environments
 venv/
 env/
 ENV/
+.venv/
 .venv
+virtualenv/
+pipenv/
+poetry.lock
 
-# Node
+# Python build artifacts
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# Alembic
+alembic/versions/*.pyc
+
+# ============ Node.js / Frontend ============
+# Dependencies
 node_modules/
+jspm_packages/
+bower_components/
+
+# Package manager files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+.pnpm-debug.log*
+
+# Next.js
+.next/
+out/
+.next/*
+build/
+dist/
+
+# Production builds
+*.tsbuildinfo
+next-env.d.ts
+
+# Testing
+coverage/
+.nyc_output
+
+# Misc
+.DS_Store
+*.pem
+
+# Debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.pnpm-debug.log*
 
-# Documentation with sensitive info
-OPENWEATHERMAP_INTEGRATION.md
+# Local env files
+.env*.local
 
-# Temporary files
+# Vercel
+.vercel
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Turbo
+.turbo
+
+# ============ Logs ============
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+app.log
+error.log
+access.log
+combined.log
+server.log
+backend.log
+frontend.log
+
+# ============ OS Files ============
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ============ IDEs & Editors ============
+# VSCode
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.code-workspace
+.history/
+
+# JetBrains IDEs (PyCharm, WebStorm, IntelliJ, etc.)
+.idea/
+*.iml
+*.ipr
+*.iws
+.idea_modules/
+out/
+
+# Sublime Text
+*.tmlanguage.cache
+*.tmPreferences.cache
+*.stTheme.cache
+*.sublime-workspace
+*.sublime-project
+
+# Vim
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+Session.vim
+Sessionx.vim
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Xcode
+*.xcodeproj
+*.xcworkspace
+
+# ============ Temporary Files ============
 *.tmp
 *.temp
 *.bak
 *.backup
+*.swp
+*.swo
+*~
 tmp/
 temp/
+.cache/
+
+# ============ Cloud & Deployment ============
+# Docker
+docker-compose.override.yml
+*.dockerfile
+.dockerignore
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+
+# AWS
+.aws/
+*.aws
+
+# Google Cloud
+.gcloud/
+.config/gcloud/
+
+# Azure
+.azure/
+
+# Heroku
+.heroku/
+
+# ============ Documentation (Sensitive) ============
+# Documents with API keys or sensitive info
+OPENWEATHERMAP_INTEGRATION.md
+API_KEYS.md
+SECRETS.md
+PRODUCTION_NOTES.md
+
+# ============ Build Artifacts ============
+# Python
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Node
+*.js.map
+*.css.map
+
+# ============ Media & Assets ============
+# Large files (if not needed in repo)
+# *.mp4
+# *.avi
+# *.mov
+# *.wmv
+# *.mp3
+# *.wav
+# *.zip
+# *.tar.gz
+# *.rar
+
+# ============ Testing & CI/CD ============
+.coverage
+.pytest_cache/
+.tox/
+.nox/
+junit.xml
+test-results/
+test-output/
+
+# ============ Miscellaneous ============
+# Redis dump
+dump.rdb
+
+# Elasticsearch
+elasticsearch_data/
+
+# MongoDB
+mongodb/
+
+# Email templates (if generated)
+*.html.backup
+
+# Thumbnails
+thumbs/
+
+# Sentry
+.sentryclirc
+
+# Mac Finder
+.DS_Store?
+
+# Lock files for specific package managers
+Gemfile.lock
+composer.lock
+
+# Editor configs (keep base config)
+!.editorconfig
+
+# Keep example files
+!*.example
+!*-example.*
+!example.*
+
+# Backups
+backup/
+backups/
+*.backup
+*.old
+*.orig
+
+# Compiled source
+*.com
+*.class
+*.dll
+*.exe
+*.o
+*.so
+
+# Archives
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# ============ Project-Specific ============
+# Alembic migrations (keep base structure, ignore generated)
+# alembic/versions/*
+# !alembic/versions/.gitkeep
+# !alembic/versions/001_consolidated_initial_migration.py
+# !alembic/versions/122b81ebc3d7_add_compound_indexes_to_models.py
+
+# Memory embeddings cache (if storing locally)
+embeddings_cache/
+*.embeddings
+
+# Analytics data exports
+analytics_exports/
+exports/
+
+# User uploads (if stored locally)
+uploads/
+user_files/
+
+# Session data
+sessions/
+
+# ============ Keep These ============
+# Documentation
+!README.md
+!CHANGELOG.md
+!CONTRIBUTING.md
+!LICENSE
+
+# Config examples
+!.env.example
+!.env.template
+!config.example.json
+
+# GitHub
+!.github/
+!.github/workflows/
+
+# Git attributes
+!.gitattributes

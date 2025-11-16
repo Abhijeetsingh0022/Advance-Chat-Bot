@@ -29,10 +29,12 @@ class ProfileUpdateRequest(BaseModel):
 
 class AppearanceSettings(BaseModel):
     """User appearance preferences"""
-    theme: str = "dark"  # "light" or "dark"
+    theme: str = "system"  # "light", "dark", or "system"
     glass_style: str = "default"  # "default", "strong", "subtle", "vibrant"
     font_size: str = "medium"  # "small", "medium", "large"
     accent_color: str = "gray"  # "gray", "blue", "purple", "green", "red"
+    message_style: str = "rounded"  # "classic", "rounded", "bubble"
+    compact_mode: bool = False  # Compact display mode
 
 
 class NotificationSettings(BaseModel):
@@ -51,10 +53,40 @@ class PrivacySettings(BaseModel):
 
 class AIPreferences(BaseModel):
     """AI chat preferences"""
-    default_model: str = "gpt-oss"
+    default_model: str = "openai/gpt-oss-20b:free"
     temperature: float = 0.7
     max_tokens: int = 2000
     stream_responses: bool = True
+    optimize_for: str = "balanced"  # "cost", "balanced", "quality"
+    top_p: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
+
+
+class ChatSettings(BaseModel):
+    """Chat-specific settings"""
+    auto_save: bool = True
+    history_retention: str = "forever"  # "7d", "30d", "90d", "forever"
+    message_limit: int = 100
+    suggested_replies: bool = True
+    code_highlighting: bool = True
+    latex_rendering: bool = True
+    link_previews: bool = True
+    max_file_size: int = 10  # MB
+
+
+class MemorySettings(BaseModel):
+    """Memory management settings"""
+    auto_extraction: bool = True
+    extraction_threshold: int = 5
+    auto_verification: bool = False
+    retention_period: str = "forever"  # "30d", "90d", "1y", "forever"
+    enabled_categories: dict = {
+        "facts": True,
+        "preferences": True,
+        "context": True,
+        "technical": True
+    }
 
 
 class UserSettings(BaseModel):
@@ -64,6 +96,8 @@ class UserSettings(BaseModel):
     notifications: Optional[NotificationSettings] = NotificationSettings()
     privacy: Optional[PrivacySettings] = PrivacySettings()
     ai_preferences: Optional[AIPreferences] = AIPreferences()
+    chat_settings: Optional[ChatSettings] = ChatSettings()
+    memory_settings: Optional[MemorySettings] = MemorySettings()
 
 
 class PasswordChangeRequest(BaseModel):
@@ -149,12 +183,27 @@ async def get_settings(current_user_id: str = Depends(get_current_user)):
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
+        # Get appearance settings with proper defaults
+        appearance_dict = user.get("appearance", {})
+        if not appearance_dict:
+            appearance_dict = AppearanceSettings().dict()
+        
+        # Ensure all required fields exist
+        default_appearance = AppearanceSettings().dict()
+        for key, value in default_appearance.items():
+            if key not in appearance_dict:
+                appearance_dict[key] = value
+        
+        logger.info(f"Fetching settings for user {current_user_id}, appearance: {appearance_dict}")
+        
         # Return settings with defaults if not set
         return {
-            "appearance": user.get("appearance", AppearanceSettings().dict()),
+            "appearance": appearance_dict,
             "notifications": user.get("notifications", NotificationSettings().dict()),
             "privacy": user.get("privacy", PrivacySettings().dict()),
-            "ai_preferences": user.get("ai_preferences", AIPreferences().dict())
+            "ai_preferences": user.get("ai_preferences", AIPreferences().dict()),
+            "chat_settings": user.get("chat_settings", ChatSettings().dict()),
+            "memory_settings": user.get("memory_settings", MemorySettings().dict())
         }
     except HTTPException:
         raise
@@ -174,13 +223,24 @@ async def update_settings(
         
         update_data = {}
         if settings.appearance:
-            update_data["appearance"] = settings.appearance.dict()
+            appearance_dict = settings.appearance.dict()
+            update_data["appearance"] = appearance_dict
+            logger.info(f"Updating appearance for user {current_user_id}: {appearance_dict}")
         if settings.notifications:
             update_data["notifications"] = settings.notifications.dict()
         if settings.privacy:
             update_data["privacy"] = settings.privacy.dict()
         if settings.ai_preferences:
             update_data["ai_preferences"] = settings.ai_preferences.dict()
+        if settings.chat_settings:
+            update_data["chat_settings"] = settings.chat_settings.dict()
+            logger.info(f"Updating chat settings for user {current_user_id}")
+        if settings.memory_settings:
+            update_data["memory_settings"] = settings.memory_settings.dict()
+            logger.info(f"Updating memory settings for user {current_user_id}")
+        
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No settings provided to update")
         
         update_data["updated_at"] = datetime.utcnow()
         
@@ -192,8 +252,8 @@ async def update_settings(
         if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="User not found")
         
-        logger.info(f"Settings updated for user {current_user_id}")
-        return {"message": "Settings updated successfully"}
+        logger.info(f"Settings updated successfully for user {current_user_id}")
+        return {"message": "Settings updated successfully", "updated": update_data}
     except HTTPException:
         raise
     except Exception as e:
